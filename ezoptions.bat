@@ -1,1 +1,1 @@
-streamlit run https://raw.githubusercontent.com/EazyDuz1t/ezoptions/refs/heads/main/ezoptions.py
+python -m streamlit run https://raw.githubusercontent.com/EazyDuz1t/ezoptions/refs/heads/main/ezoptions.py
