@@ -996,6 +996,11 @@ elif st.session_state.current_page == "Dashboard":
                                 fig_intraday.update_xaxes(title_text="Time")
                                 fig_intraday.update_yaxes(title_text="Price", secondary_y=False)
                             
+                            # Calculate volume ratio
+                            call_volume = calls['volume'].sum()
+                            put_volume = puts['volume'].sum()
+                            fig_volume_ratio = create_donut_chart(call_volume, put_volume)
+                            
                             # Display charts in four quadrants
                             st.plotly_chart(fig_intraday, use_container_width=True, key="Dashboard_intraday_chart")
                             col1, col2 = st.columns(2)
@@ -1004,6 +1009,7 @@ elif st.session_state.current_page == "Dashboard":
                                 st.plotly_chart(fig_vanna, use_container_width=True, key="Dashboard_vanna_chart")
                             with col2:
                                 st.plotly_chart(fig_delta, use_container_width=True, key="Dashboard_delta_chart")
+                                st.plotly_chart(fig_volume_ratio, use_container_width=True, key="Dashboard_volume_ratio_chart")
 
 elif st.session_state.current_page == "Intraday Price":
     main_container = st.container()
