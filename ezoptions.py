@@ -345,7 +345,7 @@ def manual_refresh():
         safe_rerun()
 
 st.sidebar.title("Navigation")
-pages = ["Options Data", "Volume Ratio", "Gamma Exposure", 
+pages = ["OI & Volume", "Volume Ratio", "Gamma Exposure", 
          "Calculated Greeks", "Vanna Exposure", "Delta Exposure", "Dashboard", "Intraday Price", "Charm Exposure"]  # Added "Charm Exposure"
 new_page = st.sidebar.radio("Select a page:", pages)
 
@@ -355,7 +355,7 @@ if handle_page_change(new_page):
 # Use the saved ticker if available
 saved_ticker = st.session_state.get("saved_ticker", "AAPL")
 
-if st.session_state.current_page == "Options Data":
+if st.session_state.current_page == "OI & Volume":
     main_container = st.container()
     with main_container:
         st.empty()  # Clear previous content
