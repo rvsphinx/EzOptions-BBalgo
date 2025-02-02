@@ -1203,7 +1203,7 @@ elif st.session_state.current_page == "Charm Exposure":
                             st.plotly_chart(fig_bar, use_container_width=True, key=f"Charm Exposure_bar_chart")
 
 # -----------------------------------------
-# Auto-refresh block: reworked per new suggestion
+# Auto-refresh
 # -----------------------------------------
 refresh_rate = 10  # in seconds
 if not st.session_state.get("loading_complete", False):
