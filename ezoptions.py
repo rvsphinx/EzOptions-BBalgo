@@ -961,9 +961,13 @@ elif st.session_state.current_page == "Dashboard":
                                     font=dict(color='white', size=15)
                                 )
                                 
+                                calls['OptionType'] = 'Call'
+                                puts['OptionType'] = 'Put'
+
                                 # Add GEX levels to intraday chart
-                                top5 = pd.concat([calls, puts]).nlargest(5, 'GEX')[['strike', 'GEX']]
+                                top5 = pd.concat([calls, puts]).nlargest(5, 'GEX')[['strike', 'GEX', 'OptionType']]
                                 for row in top5.itertuples():
+                                    color = 'green' if row.OptionType == 'Call' else 'darkred'
                                     fig_intraday.add_shape(
                                         type='line',
                                         x0=intraday_data.index[0],
@@ -971,7 +975,7 @@ elif st.session_state.current_page == "Dashboard":
                                         y0=row.strike,
                                         y1=row.strike,
                                         line=dict(
-                                            color='green' if row.GEX >= 0 else 'red',
+                                            color=color,
                                             width=2
                                         ),
                                         xref='x',
@@ -1015,7 +1019,7 @@ elif st.session_state.current_page == "Intraday Price":
     main_container = st.container()
     with main_container:
         st.empty()
-        manual_refresh()  # Add refresh button
+        manual_refresh()
         user_ticker = st.text_input("Enter Stock Ticker (e.g., AAPL, TSLA, SPX):", saved_ticker, key="intraday_price_ticker")
         ticker = format_ticker(user_ticker)
         save_ticker(user_ticker)
@@ -1026,10 +1030,10 @@ elif st.session_state.current_page == "Intraday Price":
             if intraday_data.empty:
                 st.warning("No intraday data available for this ticker.")
             else:
-                fig = make_subplots(specs=[[{"secondary_y": True}]])
+                fig_intraday = make_subplots(specs=[[{"secondary_y": True}]])
                 
                 # Plot intraday price
-                fig.add_trace(
+                fig_intraday.add_trace(
                     go.Scatter(
                         x=intraday_data.index,
                         y=intraday_data['Close'],
@@ -1039,14 +1043,13 @@ elif st.session_state.current_page == "Intraday Price":
                     secondary_y=False
                 )
                 
-                # Annotate current price
                 current_price = intraday_data['Close'].iloc[-1]
-                fig.add_annotation(
+                fig_intraday.add_annotation(
                     x=intraday_data.index[-1],
                     y=current_price,
                     xref='x',
                     yref='y',
-                    xshift=27,  # shift annotation slightly to the right
+                    xshift=27,
                     showarrow=False,
                     arrowhead=2,
                     text=f"{current_price:,.2f}",
@@ -1056,6 +1059,10 @@ elif st.session_state.current_page == "Intraday Price":
                 # Fetch options data and compute GEX
                 calls, puts = fetch_data_with_cache(ticker, "intraday_gex")
                 if not calls.empty or not puts.empty:
+                    # Add option type before concatenation
+                    calls['OptionType'] = 'Call'
+                    puts['OptionType'] = 'Put'
+                    
                     options_df = pd.concat([calls, puts]).dropna(subset=['extracted_expiry'])
                     if not options_df.empty:
                         selected_expiry = sorted(options_df['extracted_expiry'].unique())[0]
@@ -1072,30 +1079,32 @@ elif st.session_state.current_page == "Intraday Price":
                                     sigma = row.get("impliedVolatility", None)
                                     if sigma is None or sigma <= 0:
                                         return None
-                                    flag = 'c' if row['contractSymbol'].endswith('C') else 'p'
+                                    flag = 'c' if row.OptionType == 'Call' else 'p'
                                     _, gamma_val, _ = calculate_greeks(flag, S, row["strike"], t_years, sigma)
                                     return gamma_val * row.get("openInterest", 0) * 100 if gamma_val else None
                                 
                                 options_df['GEX'] = options_df.apply(compute_gex, axis=1)
                                 options_df = options_df.dropna(subset=['GEX'])
-                                top5 = options_df.nlargest(5, 'GEX')[['contractSymbol', 'strike', 'GEX']]
+
+                                top5 = options_df.nlargest(5, 'GEX')[['strike', 'GEX', 'OptionType']]
                                 
-                                # Add horizontal lines for the top GEX strikes
+                                # Add GEX levels to intraday chart
                                 for row in top5.itertuples():
-                                    fig.add_shape(
+                                    color = 'green' if row.OptionType == 'Call' else 'darkred'
+                                    fig_intraday.add_shape(
                                         type='line',
                                         x0=intraday_data.index[0],
                                         x1=intraday_data.index[-1],
                                         y0=row.strike,
                                         y1=row.strike,
                                         line=dict(
-                                            color='green' if row.GEX >= 0 else 'red',
+                                            color=color,
                                             width=2
                                         ),
                                         xref='x',
                                         yref='y'
                                     )
-                                    fig.add_annotation(
+                                    fig_intraday.add_annotation(
                                         x=intraday_data.index[-1],
                                         y=row.strike,
                                         xref='x',
@@ -1105,18 +1114,18 @@ elif st.session_state.current_page == "Intraday Price":
                                         text=f"GEX {row.GEX:,.0f}"
                                     )
                 
-                fig.update_layout(
-                    title=f"Intraday Price and Top 5 GEX for {ticker}",
+                fig_intraday.update_layout(
+                    title=f"Intraday Price for {ticker}",
                     height=600,
                     hovermode='x unified',
                     margin=dict(r=150, l=50)
                 )
                 
-                fig.update_xaxes(title_text="Time")
-                fig.update_yaxes(title_text="Price", secondary_y=False)
+                fig_intraday.update_xaxes(title_text="Time")
+                fig_intraday.update_yaxes(title_text="Price", secondary_y=False)
                 
-                st.plotly_chart(fig, use_container_width=True, key="Intraday Price_chart")
-
+                st.plotly_chart(fig_intraday, use_container_width=True, key="Intraday Price_chart")
+                
 elif st.session_state.current_page == "Charm Exposure":
     main_container = st.container()
     with main_container:
@@ -1215,8 +1224,6 @@ elif st.session_state.current_page == "Charm Exposure":
 refresh_rate = 10  # in seconds
 if not st.session_state.get("loading_complete", False):
     st.session_state.loading_complete = True
-    st.cache_data.clear()
-    st.cache_resource.clear()
     safe_rerun()
 else:
     time.sleep(refresh_rate)
