@@ -345,8 +345,9 @@ def manual_refresh():
         safe_rerun()
 
 st.sidebar.title("Navigation")
-pages = ["OI & Volume", "Volume Ratio", "Gamma Exposure", 
-         "Calculated Greeks", "Vanna Exposure", "Delta Exposure", "Dashboard", "Intraday Price", "Charm Exposure"]  # Added "Charm Exposure"
+pages = ["Dashboard", "Intraday Price", "Volume Ratio", "OI & Volume", "Gamma Exposure", "Delta Exposure", 
+         "Vanna Exposure", "Charm Exposure", "Calculated Greeks"]
+
 new_page = st.sidebar.radio("Select a page:", pages)
 
 if handle_page_change(new_page):
