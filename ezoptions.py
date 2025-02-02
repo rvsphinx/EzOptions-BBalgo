@@ -938,7 +938,12 @@ elif st.session_state.current_page == "Dashboard":
                             if intraday_data.empty:
                                 st.warning("No intraday data available for this ticker.")
                             else:
+                                # Initialize plot with cleared shapes/annotations
                                 fig_intraday = make_subplots(specs=[[{"secondary_y": True}]])
+                                fig_intraday.layout.shapes = []
+                                fig_intraday.layout.annotations = []
+                                
+                                # Add price trace
                                 fig_intraday.add_trace(
                                     go.Scatter(
                                         x=intraday_data.index,
@@ -948,6 +953,8 @@ elif st.session_state.current_page == "Dashboard":
                                     ),
                                     secondary_y=False
                                 )
+                                
+                                # Add current price annotation
                                 current_price = intraday_data['Close'].iloc[-1]
                                 fig_intraday.add_annotation(
                                     x=intraday_data.index[-1],
@@ -956,41 +963,52 @@ elif st.session_state.current_page == "Dashboard":
                                     yref='y',
                                     xshift=27,
                                     showarrow=False,
-                                    arrowhead=2,
                                     text=f"{current_price:,.2f}",
-                                    font=dict(color='white', size=15)
+                                    font=dict(color='yellow', size=15)
                                 )
                                 
+                                # Process options data
                                 calls['OptionType'] = 'Call'
                                 puts['OptionType'] = 'Put'
-
-                                # Add GEX levels to intraday chart
-                                top5 = pd.concat([calls, puts]).nlargest(5, 'GEX')[['strike', 'GEX', 'OptionType']]
-                                for row in top5.itertuples():
-                                    color = 'green' if row.OptionType == 'Call' else 'darkred'
-                                    fig_intraday.add_shape(
-                                        type='line',
-                                        x0=intraday_data.index[0],
-                                        x1=intraday_data.index[-1],
-                                        y0=row.strike,
-                                        y1=row.strike,
-                                        line=dict(
-                                            color=color,
-                                            width=2
-                                        ),
-                                        xref='x',
-                                        yref='y'
-                                    )
-                                    fig_intraday.add_annotation(
-                                        x=intraday_data.index[-1],
-                                        y=row.strike,
-                                        xref='x',
-                                        yref='y',
-                                        showarrow=True,
-                                        arrowhead=1,
-                                        text=f"GEX {row.GEX:,.0f}"
-                                    )
                                 
+                                # Combine and filter GEX data
+                                options_df = pd.concat([calls, puts]).dropna(subset=['GEX'])
+                                added_strikes = set()
+                                
+                                if not options_df.empty:
+                                    top5 = options_df.nlargest(5, 'GEX')[['strike', 'GEX', 'OptionType']]
+                                    
+                                    # Add GEX levels
+                                    for row in top5.itertuples():
+                                        if row.strike not in added_strikes:
+                                            color = 'green' if row.OptionType == 'Call' else 'darkred'
+                                            
+                                            # Add horizontal line
+                                            fig_intraday.add_shape(
+                                                type='line',
+                                                x0=intraday_data.index[0],
+                                                x1=intraday_data.index[-1],
+                                                y0=row.strike,
+                                                y1=row.strike,
+                                                line=dict(color=color, width=2),
+                                                xref='x',
+                                                yref='y'
+                                            )
+                                            
+                                            # Add GEX annotation
+                                            fig_intraday.add_annotation(
+                                                x=intraday_data.index[-1],
+                                                y=row.strike,
+                                                xref='x',
+                                                yref='y',
+                                                showarrow=True,
+                                                arrowhead=1,
+                                                text=f"GEX {row.GEX:,.0f}"
+                                            )
+                                            
+                                            added_strikes.add(row.strike)
+                                
+                                # Update layout
                                 fig_intraday.update_layout(
                                     title=f"Intraday Price for {ticker}",
                                     height=600,
@@ -999,6 +1017,7 @@ elif st.session_state.current_page == "Dashboard":
                                 )
                                 fig_intraday.update_xaxes(title_text="Time")
                                 fig_intraday.update_yaxes(title_text="Price", secondary_y=False)
+
                             
                             # Calculate volume ratio
                             call_volume = calls['volume'].sum()
@@ -1015,6 +1034,7 @@ elif st.session_state.current_page == "Dashboard":
                                 st.plotly_chart(fig_delta, use_container_width=True, key="Dashboard_delta_chart")
                                 st.plotly_chart(fig_volume_ratio, use_container_width=True, key="Dashboard_volume_ratio_chart")
 
+
 elif st.session_state.current_page == "Intraday Price":
     main_container = st.container()
     with main_container:
@@ -1030,7 +1050,12 @@ elif st.session_state.current_page == "Intraday Price":
             if intraday_data.empty:
                 st.warning("No intraday data available for this ticker.")
             else:
+                # Initialize plot
                 fig_intraday = make_subplots(specs=[[{"secondary_y": True}]])
+                
+                # Clear any existing shapes/annotations
+                fig_intraday.layout.shapes = []
+                fig_intraday.layout.annotations = []
                 
                 # Plot intraday price
                 fig_intraday.add_trace(
@@ -1043,6 +1068,7 @@ elif st.session_state.current_page == "Intraday Price":
                     secondary_y=False
                 )
                 
+                # Add current price annotation
                 current_price = intraday_data['Close'].iloc[-1]
                 fig_intraday.add_annotation(
                     x=intraday_data.index[-1],
@@ -1051,15 +1077,13 @@ elif st.session_state.current_page == "Intraday Price":
                     yref='y',
                     xshift=27,
                     showarrow=False,
-                    arrowhead=2,
                     text=f"{current_price:,.2f}",
-                    font=dict(color='white', size=15)
+                    font=dict(color='yellow', size=15)
                 )
 
-                # Fetch options data and compute GEX
+                # Fetch and process options data
                 calls, puts = fetch_data_with_cache(ticker, "intraday_gex")
                 if not calls.empty or not puts.empty:
-                    # Add option type before concatenation
                     calls['OptionType'] = 'Call'
                     puts['OptionType'] = 'Put'
                     
@@ -1068,52 +1092,65 @@ elif st.session_state.current_page == "Intraday Price":
                         selected_expiry = sorted(options_df['extracted_expiry'].unique())[0]
                         options_df = options_df[options_df['extracted_expiry'] == selected_expiry]
                         S = get_last_price(stock)
+                        
                         if S is not None:
                             S = round(S, 2)
                             today = datetime.today().date()
                             t_days = (selected_expiry - today).days
+                            
                             if t_days > 0:
                                 t_years = t_days / 365.0
                                 
+                                # Compute GEX
                                 def compute_gex(row):
                                     sigma = row.get("impliedVolatility", None)
                                     if sigma is None or sigma <= 0:
                                         return None
                                     flag = 'c' if row.OptionType == 'Call' else 'p'
-                                    _, gamma_val, _ = calculate_greeks(flag, S, row["strike"], t_years, sigma)
-                                    return gamma_val * row.get("openInterest", 0) * 100 if gamma_val else None
-                                
+                                    try:
+                                        _, gamma_val, _ = calculate_greeks(flag, S, row["strike"], t_years, sigma)
+                                        return gamma_val * row.get("openInterest", 0) * 100 if gamma_val else None
+                                    except:
+                                        return None
+
                                 options_df['GEX'] = options_df.apply(compute_gex, axis=1)
                                 options_df = options_df.dropna(subset=['GEX'])
-
+                                
+                                # Get top 5 GEX levels
+                                added_strikes = set()
                                 top5 = options_df.nlargest(5, 'GEX')[['strike', 'GEX', 'OptionType']]
                                 
-                                # Add GEX levels to intraday chart
+                                # Add GEX levels to chart
                                 for row in top5.itertuples():
-                                    color = 'green' if row.OptionType == 'Call' else 'darkred'
-                                    fig_intraday.add_shape(
-                                        type='line',
-                                        x0=intraday_data.index[0],
-                                        x1=intraday_data.index[-1],
-                                        y0=row.strike,
-                                        y1=row.strike,
-                                        line=dict(
-                                            color=color,
-                                            width=2
-                                        ),
-                                        xref='x',
-                                        yref='y'
-                                    )
-                                    fig_intraday.add_annotation(
-                                        x=intraday_data.index[-1],
-                                        y=row.strike,
-                                        xref='x',
-                                        yref='y',
-                                        showarrow=True,
-                                        arrowhead=1,
-                                        text=f"GEX {row.GEX:,.0f}"
-                                    )
+                                    if row.strike not in added_strikes:
+                                        color = 'green' if row.OptionType == 'Call' else 'darkred'
+                                        
+                                        # Add shape
+                                        fig_intraday.add_shape(
+                                            type='line',
+                                            x0=intraday_data.index[0],
+                                            x1=intraday_data.index[-1],
+                                            y0=row.strike,
+                                            y1=row.strike,
+                                            line=dict(color=color, width=2),
+                                            xref='x',
+                                            yref='y'
+                                        )
+                                        
+                                        # Add annotation
+                                        fig_intraday.add_annotation(
+                                            x=intraday_data.index[-1],
+                                            y=row.strike,
+                                            xref='x',
+                                            yref='y',
+                                            showarrow=True,
+                                            arrowhead=1,
+                                            text=f"GEX {row.GEX:,.0f}"
+                                        )
+                                        
+                                        added_strikes.add(row.strike)
                 
+                # Update layout
                 fig_intraday.update_layout(
                     title=f"Intraday Price for {ticker}",
                     height=600,
