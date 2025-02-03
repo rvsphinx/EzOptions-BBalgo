@@ -4,15 +4,25 @@ A real-time options analysis tool that provides interactive visualizations of op
 
 ## Quick Start
 
+### Windows Users:
 1. Run the requirements installer:
-```bat
-requirements.bat
-```
-
+   ```bat
+   requirements.bat
+   ```
 2. Launch the dashboard:
-```bat
-ezoptions.bat
-```
+   ```bat
+   ezoptions.bat
+   ```
+
+### Mac Users:
+1. Manually install the required Python packages:
+   ```sh
+   pip install -r requirements.txt
+   ```
+2. Run the script in the terminal:
+   ```sh
+   python -m streamlit run https://raw.githubusercontent.com/EazyDuz1t/ezoptions/refs/heads/main/ezoptions.py
+   ```
 
 ## Features
 
@@ -26,15 +36,7 @@ ezoptions.bat
 
 - Python 3.x
 
-Required Python packages will be automatically installed by the 
-
-requirements.bat
-
- file from 
-
-requirements.txt
-
-.
+Required Python packages will be automatically installed by the `requirements.bat` file on Windows or manually installed using `pip install -r requirements.txt` on Mac.
 
 ## Usage
 
