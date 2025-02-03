@@ -1015,7 +1015,7 @@ elif st.session_state.current_page == "Dashboard":
                                 added_strikes = set()
                                 
                                 if not options_df.empty:
-                                    top5 = options_df.nlargest(5, 'GEX')[['strike', 'GEX', 'OptionType']]
+                                    top5 = options_df.nlargest(7, 'GEX')[['strike', 'GEX', 'OptionType']]
                                     
                                     # Add GEX levels
                                     for row in top5.itertuples():
@@ -1157,7 +1157,7 @@ elif st.session_state.current_page == "Intraday Price":
                                 
                                 # Get top 5 GEX levels
                                 added_strikes = set()
-                                top5 = options_df.nlargest(5, 'GEX')[['strike', 'GEX', 'OptionType']]
+                                top5 = options_df.nlargest(7, 'GEX')[['strike', 'GEX', 'OptionType']]
                                 
                                 # Add GEX levels to chart
                                 for row in top5.itertuples():
