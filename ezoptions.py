@@ -585,7 +585,9 @@ elif st.session_state.current_page in ["Gamma Exposure", "Vanna Exposure", "Delt
                                     puts_df = puts[['strike', 'GEX']].copy()
                                     puts_df['OptionType'] = 'Put'
                                     combined_chart = pd.concat([calls_df, puts_df], ignore_index=True)
+                                    combined_chart = combined_chart[combined_chart['GEX'] != 0]  # Exclude values of 0
                                     combined_chart.sort_values(by='strike', inplace=True)
+                                    
                                     fig = px.bar(
                                         combined_chart,
                                         x='strike',
@@ -601,10 +603,16 @@ elif st.session_state.current_page in ["Gamma Exposure", "Vanna Exposure", "Delt
                                         hovermode='x unified'
                                     )
                                     fig.update_xaxes(rangeslider=dict(visible=True))
-
-
+                                    
+                                    # Zoom into the range around the current price
+                                    zoom_range = 0.1 * S  # 10% of the current price
+                                    min_strike = max(S - zoom_range, combined_chart['strike'].min())
+                                    max_strike = min(S + zoom_range, combined_chart['strike'].max())
+                                    
+                                    fig.update_xaxes(range=[min_strike, max_strike])
+                                    
                                     fig = add_current_price_line(fig, S)  # Add price line
-
+                                    
                                     return fig
                                 
                                 fig_bar = create_gex_bar_chart(calls, puts)
@@ -661,7 +669,9 @@ elif st.session_state.current_page in ["Gamma Exposure", "Vanna Exposure", "Delt
                                     puts_df = puts[['strike', 'VEX']].copy()
                                     puts_df['OptionType'] = 'Put'
                                     combined_chart = pd.concat([calls_df, puts_df], ignore_index=True)
+                                    combined_chart = combined_chart[combined_chart['VEX'] != 0]  # Exclude values of 0
                                     combined_chart.sort_values(by='strike', inplace=True)
+                                    
                                     fig = px.bar(
                                         combined_chart,
                                         x='strike',
@@ -677,8 +687,16 @@ elif st.session_state.current_page in ["Gamma Exposure", "Vanna Exposure", "Delt
                                         hovermode='x unified'
                                     )
                                     fig.update_xaxes(rangeslider=dict(visible=True))
-
+                                    
+                                    # Zoom into the range around the current price
+                                    zoom_range = 0.1 * S  # 10% of the current price
+                                    min_strike = max(S - zoom_range, combined_chart['strike'].min())
+                                    max_strike = min(S + zoom_range, combined_chart['strike'].max())
+                                    
+                                    fig.update_xaxes(range=[min_strike, max_strike])
+                                    
                                     fig = add_current_price_line(fig, S)  # Add price line
+                                    
                                     return fig
                                 
                                 fig_bar = create_vex_bar_chart(calls, puts)
@@ -735,7 +753,9 @@ elif st.session_state.current_page in ["Gamma Exposure", "Vanna Exposure", "Delt
                                     puts_df = puts[['strike', 'DEX']].copy()
                                     puts_df['OptionType'] = 'Put'
                                     combined_chart = pd.concat([calls_df, puts_df], ignore_index=True)
+                                    combined_chart = combined_chart[combined_chart['DEX'] != 0]  # Exclude values of 0
                                     combined_chart.sort_values(by='strike', inplace=True)
+                                    
                                     fig = px.bar(
                                         combined_chart,
                                         x='strike',
@@ -751,8 +771,16 @@ elif st.session_state.current_page in ["Gamma Exposure", "Vanna Exposure", "Delt
                                         hovermode='x unified'
                                     )
                                     fig.update_xaxes(rangeslider=dict(visible=True))
-
+                                    
+                                    # Zoom into the range around the current price
+                                    zoom_range = 0.1 * S  # 10% of the current price
+                                    min_strike = max(S - zoom_range, combined_chart['strike'].min())
+                                    max_strike = min(S + zoom_range, combined_chart['strike'].max())
+                                    
+                                    fig.update_xaxes(range=[min_strike, max_strike])
+                                    
                                     fig = add_current_price_line(fig, S)  # Add price line
+                                    
                                     return fig
                                 
                                 fig_bar = create_dex_bar_chart(calls, puts)
@@ -945,12 +973,18 @@ elif st.session_state.current_page == "Dashboard":
                             
                             # Create bar charts for Gamma, Vanna, and Delta
                             def create_exposure_bar_chart(calls, puts, exposure_type, title):
+                                # Filter out zero values
                                 calls_df = calls[['strike', exposure_type]].copy()
+                                calls_df = calls_df[calls_df[exposure_type] != 0]
                                 calls_df['OptionType'] = 'Call'
+                                
                                 puts_df = puts[['strike', exposure_type]].copy()
+                                puts_df = puts_df[puts_df[exposure_type] != 0]
                                 puts_df['OptionType'] = 'Put'
+                                
                                 combined_chart = pd.concat([calls_df, puts_df], ignore_index=True)
                                 combined_chart.sort_values(by='strike', inplace=True)
+                                
                                 fig = px.bar(
                                     combined_chart,
                                     x='strike',
@@ -958,15 +992,25 @@ elif st.session_state.current_page == "Dashboard":
                                     color='OptionType',
                                     title=title,
                                     barmode='group',
-                                    color_discrete_map={'Call': 'green', 'Put': 'darkred'}  # Update colors
+                                    color_discrete_map={'Call': 'green', 'Put': 'darkred'}
                                 )
+                                
                                 fig.update_layout(
                                     xaxis_title='Strike Price',
                                     yaxis_title=title,
                                     hovermode='x unified'
                                 )
+                                
                                 fig.update_xaxes(rangeslider=dict(visible=True))
-                                fig = add_current_price_line(fig, S)  # Add price line
+                                
+                                # Zoom into the range around the current price
+                                zoom_range = 0.1 * S  # 10% of the current price
+                                min_strike = max(S - zoom_range, combined_chart['strike'].min())
+                                max_strike = min(S + zoom_range, combined_chart['strike'].max())
+                                fig.update_xaxes(range=[min_strike, max_strike])
+                                
+                                fig = add_current_price_line(fig, S)
+                                
                                 return fig
                             
                             fig_gamma = create_exposure_bar_chart(calls, puts, "GEX", "Gamma Exposure by Strike")
@@ -1157,7 +1201,9 @@ elif st.session_state.current_page == "Charm Exposure":
                                 puts_df = puts[['strike', 'Charm']].copy()
                                 puts_df['OptionType'] = 'Put'
                                 combined_chart = pd.concat([calls_df, puts_df], ignore_index=True)
+                                combined_chart = combined_chart[combined_chart['Charm'] != 0]  # Exclude values of 0
                                 combined_chart.sort_values(by='strike', inplace=True)
+                                
                                 fig = px.bar(
                                     combined_chart,
                                     x='strike',
@@ -1173,7 +1219,16 @@ elif st.session_state.current_page == "Charm Exposure":
                                     hovermode='x unified'
                                 )
                                 fig.update_xaxes(rangeslider=dict(visible=True))
+                                
+                                # Zoom into the range around the current price
+                                zoom_range = 0.1 * S  # 10% of the current price
+                                min_strike = max(S - zoom_range, combined_chart['strike'].min())
+                                max_strike = min(S + zoom_range, combined_chart['strike'].max())
+                                
+                                fig.update_xaxes(range=[min_strike, max_strike])
+                                
                                 fig = add_current_price_line(fig, S)  # Add price line
+                                
                                 return fig
                             
                             fig_bar = create_charm_bar_chart(calls, puts)
