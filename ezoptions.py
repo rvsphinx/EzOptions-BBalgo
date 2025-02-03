@@ -101,8 +101,6 @@ def add_current_price_line(fig, current_price):
 def fetch_all_options(ticker):
     """
     Fetches option chains for all available expirations for the given ticker.
-    Iterates over each expiry available in ticker.options.
-    If ticker.options is empty (as for SPX), a fallback expiry is used.
     Returns two DataFrames: one for calls and one for puts, with an added column 'extracted_expiry'.
     """
     stock = yf.Ticker(ticker)
@@ -110,9 +108,36 @@ def fetch_all_options(ticker):
     all_puts = []
     
     if stock.options:
+        # Get current market date
+        current_market_date = datetime.now().date()
+        
         for exp in stock.options:
             try:
                 chain = stock.option_chain(exp)
+                calls = chain.calls
+                puts = chain.puts
+                
+                # Only process options that haven't expired
+                exp_date = datetime.strptime(exp, '%Y-%m-%d').date()
+                if exp_date >= current_market_date:
+                    if not calls.empty:
+                        calls = calls.copy()
+                        calls['extracted_expiry'] = calls['contractSymbol'].apply(extract_expiry_from_contract)
+                        all_calls.append(calls)
+                    if not puts.empty:
+                        puts = puts.copy()
+                        puts['extracted_expiry'] = puts['contractSymbol'].apply(extract_expiry_from_contract)
+                        all_puts.append(puts)
+            except Exception as e:
+                st.error(f"Error fetching chain for expiry {exp}: {e}")
+                continue
+    else:
+        # Fallback for tickers like SPX which return an empty options list
+        try:
+            # Get next valid expiration
+            next_exp = stock.options[0] if stock.options else None
+            if next_exp:
+                chain = stock.option_chain(next_exp)
                 calls = chain.calls
                 puts = chain.puts
                 if not calls.empty:
@@ -123,27 +148,8 @@ def fetch_all_options(ticker):
                     puts = puts.copy()
                     puts['extracted_expiry'] = puts['contractSymbol'].apply(extract_expiry_from_contract)
                     all_puts.append(puts)
-            except Exception as e:
-                st.error(f"Error fetching chain for expiry {exp}: {e}")
-                continue
-    else:
-        # Fallback for tickers like SPX which return an empty options list.
-        current_date = datetime.now().date()
-        default_expiry = current_date
-        try:
-            chain = stock.option_chain(default_expiry)
-            calls = chain.calls
-            puts = chain.puts
-            if not calls.empty:
-                calls = calls.copy()
-                calls['extracted_expiry'] = calls['contractSymbol'].apply(extract_expiry_from_contract)
-                all_calls.append(calls)
-            if not puts.empty:
-                puts = puts.copy()
-                puts['extracted_expiry'] = puts['contractSymbol'].apply(extract_expiry_from_contract)
-                all_puts.append(puts)
         except Exception as e:
-            st.error(f"Error fetching fallback options data for expiry {default_expiry}: {e}")
+            st.error(f"Error fetching fallback options data: {e}")
     
     if all_calls:
         combined_calls = pd.concat(all_calls, ignore_index=True)
@@ -242,6 +248,8 @@ def calculate_greeks(flag, S, K, t, sigma):
     flag: 'c' for call, 'p' for put.
     """
     try:
+        # Add a small offset to prevent division by zero
+        t = max(t, 1/1440)  # Minimum 1 minute expressed in years
         d1 = (log(S / K) + (0.5 * sigma**2) * t) / (sigma * sqrt(t))
         d2 = d1 - sigma * sqrt(t)
         delta_val = bs_delta(flag, S, K, t, 0, sigma)  # Risk-free rate set to 0
@@ -259,6 +267,8 @@ def calculate_charm(flag, S, K, t, sigma):
     Calculate charm (dDelta/dTime) for an option.
     """
     try:
+        # Add a small offset to prevent division by zero
+        t = max(t, 1/1440)  # Minimum 1 minute expressed in years
         d1 = (log(S / K) + (0.5 * sigma**2) * t) / (sigma * sqrt(t))
         d2 = d1 - sigma * sqrt(t)
         
@@ -285,6 +295,23 @@ def get_last_price(stock):
         return S
     except KeyError:
         return None
+
+def validate_expiry(expiry_date):
+    """Helper function to validate expiration dates"""
+    if expiry_date is None:
+        return False
+    try:
+        current_market_date = datetime.now().date()
+        # Allow expirations within -1 days
+        days_difference = (expiry_date - current_market_date).days
+        return days_difference >= -1
+    except Exception:
+        return False
+
+def is_valid_trading_day(expiry_date, current_date):
+    """Helper function to check if expiry is within valid trading window"""
+    days_difference = (expiry_date - current_date).days
+    return days_difference >= -1
 
 # =========================================
 # 4) Streamlit App Navigation
@@ -356,6 +383,18 @@ if handle_page_change(new_page):
 # Use the saved ticker if available
 saved_ticker = st.session_state.get("saved_ticker", "AAPL")
 
+def validate_expiry(expiry_date):
+    """Helper function to validate expiration dates"""
+    if expiry_date is None:
+        return False
+    try:
+        # For future dates, ensure they're treated as valid
+        current_market_date = datetime.now().date()
+        # Return True if expiry is today or in the future
+        return expiry_date >= current_market_date
+    except Exception:
+        return False
+
 if st.session_state.current_page == "OI & Volume":
     main_container = st.container()
     with main_container:
@@ -372,7 +411,7 @@ if st.session_state.current_page == "OI & Volume":
             else:
                 combined = pd.concat([calls, puts])
                 combined = combined.dropna(subset=['extracted_expiry'])
-                unique_exps = sorted({d for d in combined['extracted_expiry'].unique() if d is not None})
+                unique_exps = sorted({d for d in combined['extracted_expiry'].unique() if d is not None and validate_expiry(d)})
                 if not unique_exps:
                     st.error("No expiration dates could be extracted from contract symbols.")
                 else:
@@ -441,7 +480,7 @@ elif st.session_state.current_page == "Volume Ratio":
             else:
                 combined = pd.concat([calls, puts])
                 combined = combined.dropna(subset=['extracted_expiry'])
-                unique_exps = sorted({d for d in combined['extracted_expiry'].unique() if d is not None})
+                unique_exps = sorted({d for d in combined['extracted_expiry'].unique() if d is not None and validate_expiry(d)})
                 if not unique_exps:
                     st.error("No expiration dates could be extracted from contract symbols.")
                 else:
@@ -482,7 +521,7 @@ elif st.session_state.current_page in ["Gamma Exposure", "Vanna Exposure", "Delt
             else:
                 combined = pd.concat([calls, puts])
                 combined = combined.dropna(subset=['extracted_expiry'])
-                unique_exps = sorted({d for d in combined['extracted_expiry'].unique() if d is not None})
+                unique_exps = sorted({d for d in combined['extracted_expiry'].unique() if d is not None and validate_expiry(d)})
                 
                 if not unique_exps:
                     st.error("No expiration dates could be extracted from contract symbols.")
@@ -512,7 +551,7 @@ elif st.session_state.current_page in ["Gamma Exposure", "Vanna Exposure", "Delt
                             st.markdown(f"**Underlying Price (S):** {S}")
                             today = datetime.today().date()
                             t_days = (selected_expiry - today).days
-                            if t_days <= 0:
+                            if not is_valid_trading_day(selected_expiry, today):
                                 st.error("The selected expiration date is in the past!")
                             else:
                                 t = t_days / 365.0
@@ -588,7 +627,7 @@ elif st.session_state.current_page in ["Gamma Exposure", "Vanna Exposure", "Delt
                             st.markdown(f"**Underlying Price (S):** {S}")
                             today = datetime.today().date()
                             t_days = (selected_expiry - today).days
-                            if t_days <= 0:
+                            if not is_valid_trading_day(selected_expiry, today):
                                 st.error("The selected expiration date is in the past!")
                             else:
                                 t = t_days / 365.0
@@ -662,7 +701,7 @@ elif st.session_state.current_page in ["Gamma Exposure", "Vanna Exposure", "Delt
                             st.markdown(f"**Underlying Price (S):** {S}")
                             today = datetime.today().date()
                             t_days = (selected_expiry - today).days
-                            if t_days <= 0:
+                            if not is_valid_trading_day(selected_expiry, today):
                                 st.error("The selected expiration date is in the past!")
                             else:
                                 t = t_days / 365.0
@@ -739,7 +778,7 @@ elif st.session_state.current_page == "Calculated Greeks":
 
                 combined = pd.concat([calls, puts])
                 combined = combined.dropna(subset=['extracted_expiry'])
-                unique_exps = sorted({d for d in combined['extracted_expiry'].unique() if d is not None})
+                unique_exps = sorted({d for d in combined['extracted_expiry'].unique() if d is not None and validate_expiry(d)})
                 if not unique_exps:
                     st.error("No expiration dates could be extracted from contract symbols.")
                     st.stop()
@@ -841,7 +880,7 @@ elif st.session_state.current_page == "Dashboard":
             else:
                 combined = pd.concat([calls, puts])
                 combined = combined.dropna(subset=['extracted_expiry'])
-                unique_exps = sorted({d for d in combined['extracted_expiry'].unique() if d is not None})
+                unique_exps = sorted({d for d in combined['extracted_expiry'].unique() if d is not None and validate_expiry(d)})
                 
                 if not unique_exps:
                     st.error("No expiration dates could be extracted from contract symbols.")
@@ -862,7 +901,7 @@ elif st.session_state.current_page == "Dashboard":
                         st.markdown(f"**Underlying Price (S):** {S}")
                         today = datetime.today().date()
                         t_days = (selected_expiry - today).days
-                        if t_days <= 0:
+                        if not is_valid_trading_day(selected_expiry, today):
                             st.error("The selected expiration date is in the past!")
                         else:
                             t = t_days / 365.0
@@ -1179,7 +1218,7 @@ elif st.session_state.current_page == "Charm Exposure":
             else:
                 combined = pd.concat([calls, puts])
                 combined = combined.dropna(subset=['extracted_expiry'])
-                unique_exps = sorted({d for d in combined['extracted_expiry'].unique() if d is not None})
+                unique_exps = sorted({d for d in combined['extracted_expiry'].unique() if d is not None and validate_expiry(d)})
                 
                 if not unique_exps:
                     st.error("No expiration dates could be extracted from contract symbols.")
@@ -1200,7 +1239,7 @@ elif st.session_state.current_page == "Charm Exposure":
                         st.markdown(f"**Underlying Price (S):** {S}")
                         today = datetime.today().date()
                         t_days = (selected_expiry - today).days
-                        if t_days <= 0:
+                        if not is_valid_trading_day(selected_expiry, today):
                             st.error("The selected expiration date is in the past!")
                         else:
                             t = t_days / 365.0
