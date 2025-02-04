@@ -1059,7 +1059,9 @@ elif st.session_state.current_page == "Dashboard":
                                 options_df = pd.concat([calls, puts]).dropna(subset=['GEX'])
                                 added_strikes = set()
                                 
-                                if not options_df.empty:
+                                if options_df.empty:
+                                    st.warning("Intraday Data will display near market open.")
+                                else:
                                     top5 = options_df.nlargest(7, 'GEX')[['strike', 'GEX', 'OptionType']]
                                     
                                     # Find max GEX value for color scaling
@@ -1068,41 +1070,45 @@ elif st.session_state.current_page == "Dashboard":
                                     # Add GEX levels
                                     for row in top5.itertuples():
                                         if row.strike not in added_strikes:
-                                            # Modified color intensity calculation - now ranges from 0.4 to 1.0
-                                            intensity = 0.4 + (min(abs(row.GEX) / max_gex, 1.0) * 0.6)
-                                            
-                                            # Create RGB color based on option type and intensity
-                                            if row.OptionType == 'Call':
-                                                color = f'rgba(0, {int(255 * intensity)}, 0, 0.9)'  # Increased opacity to 0.9
-                                            else:
-                                                color = f'rgba({int(255 * intensity)}, 0, 0, 0.9)'  # Increased opacity to 0.9
-                                            
-                                            # Add horizontal line
-                                            fig_intraday.add_shape(
-                                                type='line',
-                                                x0=intraday_data.index[0],
-                                                x1=intraday_data.index[-1],
-                                                y0=row.strike,
-                                                y1=row.strike,
-                                                line=dict(color=color, width=2),
-                                                xref='x',
-                                                yref='y'
-                                            )
-                                            
-                                            # Add GEX annotation with matching color
-                                            fig_intraday.add_annotation(
-                                                x=intraday_data.index[-1],
-                                                y=row.strike,
-                                                xref='x',
-                                                yref='y',
-                                                showarrow=True,
-                                                arrowhead=1,
-                                                text=f"GEX {row.GEX:,.0f}",
-                                                font=dict(color=color),
-                                                arrowcolor=color
-                                            )
-                                            
-                                            added_strikes.add(row.strike)
+                                            # Ensure intensity is not NaN and within valid range
+                                            if not pd.isna(row.GEX) and row.GEX != 0:
+                                                # Modified color intensity calculation - now ranges from 0.4 to 1.0
+                                                intensity = 0.4 + (min(abs(row.GEX) / max_gex, 1.0) * 0.6)
+                                                
+                                                # Ensure intensity is within valid range
+                                                if not pd.isna(intensity) and 0 <= intensity <= 1:
+                                                    # Create RGB color based on option type and intensity
+                                                    if row.OptionType == 'Call':
+                                                        color = f'rgba(0, {int(255 * intensity)}, 0, 0.9)'  # Increased opacity to 0.9
+                                                    else:
+                                                        color = f'rgba({int(255 * intensity)}, 0, 0, 0.9)'  # Increased opacity to 0.9
+                                                    
+                                                    # Add horizontal line
+                                                    fig_intraday.add_shape(
+                                                        type='line',
+                                                        x0=intraday_data.index[0],
+                                                        x1=intraday_data.index[-1],
+                                                        y0=row.strike,
+                                                        y1=row.strike,
+                                                        line=dict(color=color, width=2),
+                                                        xref='x',
+                                                        yref='y'
+                                                    )
+                                                    
+                                                    # Add GEX annotation with matching color
+                                                    fig_intraday.add_annotation(
+                                                        x=intraday_data.index[-1],
+                                                        y=row.strike,
+                                                        xref='x',
+                                                        yref='y',
+                                                        showarrow=True,
+                                                        arrowhead=1,
+                                                        text=f"GEX {row.GEX:,.0f}",
+                                                        font=dict(color=color),
+                                                        arrowcolor=color
+                                                    )
+                                                    
+                                                    added_strikes.add(row.strike)
                                 
                                 # Update layout
                                 fig_intraday.update_layout(
