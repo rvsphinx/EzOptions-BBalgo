@@ -1082,10 +1082,10 @@ elif st.session_state.current_page == "Dashboard":
                             supplemental_charts = []
                             if "Gamma Exposure" in selected_charts:
                                 supplemental_charts.append(fig_gamma)
-                            if "Delata Exposure" in selected_charts:
-                                supplemental_charts.append(fig_vanna)
-                            if "Vanna Exposure" in selected_charts:
+                            if "Delta Exposure" in selected_charts:
                                 supplemental_charts.append(fig_delta)
+                            if "Vanna Exposure" in selected_charts:
+                                supplemental_charts.append(fig_vanna)
                             if "Charm Exposure" in selected_charts:
                                 supplemental_charts.append(fig_charm)
                             if "Speed Exposure" in selected_charts:
