@@ -30,20 +30,40 @@ def format_ticker(ticker):
         return "^VIX"
     return ticker
 
-def fetch_data_with_cache(ticker, key_prefix):
+def fetch_options_for_date(ticker, date):
+    """
+    Fetches option chains for the given ticker and date.
+    Returns two DataFrames: one for calls and one for puts.
+    """
+    stock = yf.Ticker(ticker)
+    try:
+        chain = stock.option_chain(date)
+        calls = chain.calls
+        puts = chain.puts
+        calls['extracted_expiry'] = calls['contractSymbol'].apply(extract_expiry_from_contract)
+        puts['extracted_expiry'] = puts['contractSymbol'].apply(extract_expiry_from_contract)
+        return calls, puts
+    except Exception as e:
+        st.error(f"Error fetching options for date {date}: {e}")
+        return pd.DataFrame(), pd.DataFrame()
+
+def fetch_data_with_cache(ticker, date, key_prefix):
     """Helper function to fetch data with caching"""
     current_time = time.time()
     last_fetch_time_key = f"{key_prefix}_last_fetch_time"
     data_key = f"{key_prefix}_data"
     last_ticker_key = f"{key_prefix}_last_ticker"
+    last_date_key = f"{key_prefix}_last_date"
     
     if (last_fetch_time_key not in st.session_state or 
         current_time - st.session_state[last_fetch_time_key] > 30 or
-        st.session_state.get(last_ticker_key) != ticker):
-        calls, puts = fetch_all_options(ticker)
+        st.session_state.get(last_ticker_key) != ticker or
+        st.session_state.get(last_date_key) != date):
+        calls, puts = fetch_options_for_date(ticker, date)
         st.session_state[last_fetch_time_key] = current_time
         st.session_state[data_key] = (calls, puts)
         st.session_state[last_ticker_key] = ticker
+        st.session_state[last_date_key] = date
     else:
         calls, puts = st.session_state[data_key]
     
@@ -316,7 +336,7 @@ def is_valid_trading_day(expiry_date, current_date):
 # =========================================
 # 4) Streamlit App Navigation
 # =========================================
-st.title("Real-Time Stock Options Data")
+st.title("Ez Options Stock Data")
 
 def reset_session_state():
     """Reset all session state variables except for essential ones"""
@@ -405,18 +425,18 @@ if st.session_state.current_page == "OI & Volume":
         ticker = format_ticker(user_ticker)
         save_ticker(user_ticker)  # Save the ticker
         if ticker:
-            calls, puts = fetch_data_with_cache(ticker, "options_data")
-            if calls.empty and puts.empty:
+            stock = yf.Ticker(ticker)
+            available_dates = stock.options
+            if not available_dates:
                 st.warning("No options data available for this ticker.")
             else:
-                combined = pd.concat([calls, puts])
-                combined = combined.dropna(subset=['extracted_expiry'])
-                unique_exps = sorted({d for d in combined['extracted_expiry'].unique() if d is not None and validate_expiry(d)})
-                if not unique_exps:
-                    st.error("No expiration dates could be extracted from contract symbols.")
+                expiry_date_str = st.selectbox("Select an Exp. Date:", options=available_dates)
+                calls, puts = fetch_data_with_cache(ticker, expiry_date_str, "options_data")
+                if calls.empty and puts.empty:
+                    st.warning("No options data available for this ticker.")
                 else:
-                    unique_exps_str = [d.strftime("%Y-%m-%d") for d in unique_exps]
-                    expiry_date_str = st.selectbox("Select an Expiry Date (extracted from contract symbols):", options=unique_exps_str)
+                    combined = pd.concat([calls, puts])
+                    combined = combined.dropna(subset=['extracted_expiry'])
                     selected_expiry = datetime.strptime(expiry_date_str, "%Y-%m-%d").date()
                     calls = calls[calls['extracted_expiry'] == selected_expiry]
                     puts = puts[puts['extracted_expiry'] == selected_expiry]
@@ -474,18 +494,18 @@ elif st.session_state.current_page == "Volume Ratio":
         ticker = format_ticker(user_ticker)
         save_ticker(user_ticker)  # Save the ticker
         if ticker:
-            calls, puts = fetch_data_with_cache(ticker, "volume_ratio")
-            if calls.empty and puts.empty:
+            stock = yf.Ticker(ticker)
+            available_dates = stock.options
+            if not available_dates:
                 st.warning("No options data available for this ticker.")
             else:
-                combined = pd.concat([calls, puts])
-                combined = combined.dropna(subset=['extracted_expiry'])
-                unique_exps = sorted({d for d in combined['extracted_expiry'].unique() if d is not None and validate_expiry(d)})
-                if not unique_exps:
-                    st.error("No expiration dates could be extracted from contract symbols.")
+                expiry_date_str = st.selectbox("Select an Exp. Date:", options=available_dates, key="volume_ratio_expiry_main")
+                calls, puts = fetch_data_with_cache(ticker, expiry_date_str, "volume_ratio")
+                if calls.empty and puts.empty:
+                    st.warning("No options data available for this ticker.")
                 else:
-                    unique_exps_str = [d.strftime("%Y-%m-%d") for d in unique_exps]
-                    expiry_date_str = st.selectbox("Select an Expiry Date (extracted from contract symbols):", options=unique_exps_str)
+                    combined = pd.concat([calls, puts])
+                    combined = combined.dropna(subset=['extracted_expiry'])
                     selected_expiry = datetime.strptime(expiry_date_str, "%Y-%m-%d").date()
                     calls = calls[calls['extracted_expiry'] == selected_expiry]
                     puts = puts[puts['extracted_expiry'] == selected_expiry]
@@ -515,48 +535,40 @@ elif st.session_state.current_page in ["Gamma Exposure", "Vanna Exposure", "Delt
         save_ticker(user_ticker)  # Save the ticker
         
         if ticker:
-            calls, puts = fetch_data_with_cache(ticker, f"{page_name}_exposure")
-            if calls.empty and puts.empty:
+            stock = yf.Ticker(ticker)
+            available_dates = stock.options
+            if not available_dates:
                 st.warning("No options data available for this ticker.")
             else:
-                combined = pd.concat([calls, puts])
-                combined = combined.dropna(subset=['extracted_expiry'])
-                unique_exps = sorted({d for d in combined['extracted_expiry'].unique() if d is not None and validate_expiry(d)})
-                
-                if not unique_exps:
-                    st.error("No expiration dates could be extracted from contract symbols.")
+                expiry_date_str = st.selectbox("Select an Exp. Date:", options=available_dates, key=f"{page_name}_expiry_main")
+                calls, puts = fetch_data_with_cache(ticker, expiry_date_str, f"{page_name}_exposure")
+                if calls.empty and puts.empty:
+                    st.warning("No options data available for this ticker.")
                 else:
-                    unique_exps_str = [d.strftime("%Y-%m-%d") for d in unique_exps]
-                    expiry_date_str = st.selectbox(
-                        "Select an Expiry Date:", 
-                        options=unique_exps_str, 
-                        key=f"{page_name}_expiry"
-                    )
+                    combined = pd.concat([calls, puts])
+                    combined = combined.dropna(subset=['extracted_expiry'])
+                    selected_expiry = datetime.strptime(expiry_date_str, "%Y-%m-%d").date()
+                    calls = calls[calls['extracted_expiry'] == selected_expiry]
+                    puts = puts[puts['extracted_expiry'] == selected_expiry]
                     
-                    # Rest of the exposure calculation code specific to each page type
-                    if st.session_state.current_page == "Gamma Exposure":
-                        # Gamma exposure specific calculations and charts
-                        # ...existing gamma exposure calculation code...
-                        selected_expiry = datetime.strptime(expiry_date_str, "%Y-%m-%d").date()
-                        calls = calls[calls['extracted_expiry'] == selected_expiry]
-                        puts = puts[puts['extracted_expiry'] == selected_expiry]
-                        
-                        # Get underlying price
-                        stock = yf.Ticker(ticker)
-                        S = get_last_price(stock)
-                        if S is None:
-                            st.error("Could not fetch underlying price.")
+                    # Get underlying price
+                    stock = yf.Ticker(ticker)
+                    S = get_last_price(stock)
+                    if S is None:
+                        st.error("Could not fetch underlying price.")
+                    else:
+                        S = round(S, 2)
+                        st.markdown(f"**Underlying Price (S):** {S}")
+                        today = datetime.today().date()
+                        t_days = (selected_expiry - today).days
+                        if not is_valid_trading_day(selected_expiry, today):
+                            st.error("The selected expiration date is in the past!")
                         else:
-                            S = round(S, 2)
-                            st.markdown(f"**Underlying Price (S):** {S}")
-                            today = datetime.today().date()
-                            t_days = (selected_expiry - today).days
-                            if not is_valid_trading_day(selected_expiry, today):
-                                st.error("The selected expiration date is in the past!")
-                            else:
-                                t = t_days / 365.0
-                                st.markdown(f"**Time to Expiration (t in years):** {t:.4f}")
-                                
+                            t = t_days / 365.0
+                            st.markdown(f"**Time to Expiration (t in years):** {t:.4f}")
+                            
+                            if st.session_state.current_page == "Gamma Exposure":
+                                # Gamma exposure specific calculations and charts
                                 def compute_gamma(row, flag):
                                     sigma = row.get("impliedVolatility", None)
                                     if sigma is None or sigma <= 0:
@@ -578,7 +590,6 @@ elif st.session_state.current_page in ["Gamma Exposure", "Vanna Exposure", "Delt
                                 calls["GEX"] = calls["calc_gamma"] * calls["openInterest"] * 100
                                 puts["GEX"] = puts["calc_gamma"] * puts["openInterest"] * 100
                                 
-                                # Remove bubble chart code and keep only the bar chart
                                 def create_gex_bar_chart(calls, puts):
                                     calls_df = calls[['strike', 'GEX']].copy()
                                     calls_df['OptionType'] = 'Call'
@@ -618,29 +629,8 @@ elif st.session_state.current_page in ["Gamma Exposure", "Vanna Exposure", "Delt
                                 fig_bar = create_gex_bar_chart(calls, puts)
                                 st.plotly_chart(fig_bar, use_container_width=True, key=f"Gamma Exposure_bar_chart")
 
-                    elif st.session_state.current_page == "Vanna Exposure":
-                        # Vanna exposure specific calculations and charts
-                        # ...existing vanna exposure calculation code...
-                        selected_expiry = datetime.strptime(expiry_date_str, "%Y-%m-%d").date()
-                        calls = calls[calls['extracted_expiry'] == selected_expiry]
-                        puts = puts[puts['extracted_expiry'] == selected_expiry]
-                        
-                        # Get underlying price
-                        stock = yf.Ticker(ticker)
-                        S = get_last_price(stock)
-                        if S is None:
-                            st.error("Could not fetch underlying price.")
-                        else:
-                            S = round(S, 2)
-                            st.markdown(f"**Underlying Price (S):** {S}")
-                            today = datetime.today().date()
-                            t_days = (selected_expiry - today).days
-                            if not is_valid_trading_day(selected_expiry, today):
-                                st.error("The selected expiration date is in the past!")
-                            else:
-                                t = t_days / 365.0
-                                st.markdown(f"**Time to Expiration (t in years):** {t:.4f}")
-                                
+                            elif st.session_state.current_page == "Vanna Exposure":
+                                # Vanna exposure specific calculations and charts
                                 def compute_vanna(row, flag):
                                     sigma = row.get("impliedVolatility", None)
                                     if sigma is None or sigma <= 0:
@@ -662,7 +652,6 @@ elif st.session_state.current_page in ["Gamma Exposure", "Vanna Exposure", "Delt
                                 calls["VEX"] = calls["calc_vanna"] * calls["openInterest"] * 100
                                 puts["VEX"] = puts["calc_vanna"] * puts["openInterest"] * 100
                                 
-                                # Remove bubble chart code and keep only the bar chart
                                 def create_vex_bar_chart(calls, puts):
                                     calls_df = calls[['strike', 'VEX']].copy()
                                     calls_df['OptionType'] = 'Call'
@@ -702,29 +691,8 @@ elif st.session_state.current_page in ["Gamma Exposure", "Vanna Exposure", "Delt
                                 fig_bar = create_vex_bar_chart(calls, puts)
                                 st.plotly_chart(fig_bar, use_container_width=True, key=f"Vanna Exposure_bar_chart")
 
-                    elif st.session_state.current_page == "Delta Exposure":
-                        # Delta exposure specific calculations and charts
-                        # ...existing delta exposure calculation code...
-                        selected_expiry = datetime.strptime(expiry_date_str, "%Y-%m-%d").date()
-                        calls = calls[calls['extracted_expiry'] == selected_expiry]
-                        puts = puts[puts['extracted_expiry'] == selected_expiry]
-                        
-                        # Get underlying price
-                        stock = yf.Ticker(ticker)
-                        S = get_last_price(stock)
-                        if S is None:
-                            st.error("Could not fetch underlying price.")
-                        else:
-                            S = round(S, 2)
-                            st.markdown(f"**Underlying Price (S):** {S}")
-                            today = datetime.today().date()
-                            t_days = (selected_expiry - today).days
-                            if not is_valid_trading_day(selected_expiry, today):
-                                st.error("The selected expiration date is in the past!")
-                            else:
-                                t = t_days / 365.0
-                                st.markdown(f"**Time to Expiration (t in years):** {t:.4f}")
-                                
+                            elif st.session_state.current_page == "Delta Exposure":
+                                # Delta exposure specific calculations and charts
                                 def compute_delta(row, flag):
                                     sigma = row.get("impliedVolatility", None)
                                     if sigma is None or sigma <= 0:
@@ -746,7 +714,6 @@ elif st.session_state.current_page in ["Gamma Exposure", "Vanna Exposure", "Delt
                                 calls["DEX"] = calls["calc_delta"] * calls["openInterest"] * 100
                                 puts["DEX"] = puts["calc_delta"] * puts["openInterest"] * 100
                                 
-                                # Remove bubble chart code and keep only the bar chart
                                 def create_dex_bar_chart(calls, puts):
                                     calls_df = calls[['strike', 'DEX']].copy()
                                     calls_df['OptionType'] = 'Call'
@@ -798,21 +765,19 @@ elif st.session_state.current_page == "Calculated Greeks":
         save_ticker(user_ticker)  # Save the ticker
         
         if ticker:
-            try:
-                calls, puts = fetch_data_with_cache(ticker, "calculated_greeks")
+            stock = yf.Ticker(ticker)
+            available_dates = stock.options
+            if not available_dates:
+                st.warning("No options data available for this ticker.")
+            else:
+                expiry_date_str = st.selectbox("Select an Exp. Date:", options=available_dates, key="calculated_greeks_expiry_main")
+                calls, puts = fetch_data_with_cache(ticker, expiry_date_str, "calculated_greeks")
                 if calls.empty and puts.empty:
                     st.warning("No options data available for this ticker.")
                     st.stop()
 
                 combined = pd.concat([calls, puts])
                 combined = combined.dropna(subset=['extracted_expiry'])
-                unique_exps = sorted({d for d in combined['extracted_expiry'].unique() if d is not None and validate_expiry(d)})
-                if not unique_exps:
-                    st.error("No expiration dates could be extracted from contract symbols.")
-                    st.stop()
-
-                unique_exps_str = [d.strftime("%Y-%m-%d") for d in unique_exps]
-                expiry_date_str = st.selectbox("Select an Expiry Date:", options=unique_exps_str, key="calculated_greeks_expiry")
                 selected_expiry = datetime.strptime(expiry_date_str, "%Y-%m-%d").date()
 
                 # Filter options by expiry
@@ -890,9 +855,6 @@ elif st.session_state.current_page == "Calculated Greeks":
                     except Exception as e:
                         st.error(f"Error displaying {typ} data: {str(e)}")
 
-            except Exception as e:
-                st.error(f"An error occurred: {str(e)}")
-                
 elif st.session_state.current_page == "Dashboard":
     main_container = st.container()
     with main_container:
@@ -903,19 +865,18 @@ elif st.session_state.current_page == "Dashboard":
         save_ticker(user_ticker)  # Save the ticker
         
         if ticker:
-            calls, puts = fetch_data_with_cache(ticker, "dashboard")
-            if calls.empty and puts.empty:
+            stock = yf.Ticker(ticker)
+            available_dates = stock.options
+            if not available_dates:
                 st.warning("No options data available for this ticker.")
             else:
-                combined = pd.concat([calls, puts])
-                combined = combined.dropna(subset=['extracted_expiry'])
-                unique_exps = sorted({d for d in combined['extracted_expiry'].unique() if d is not None and validate_expiry(d)})
-                
-                if not unique_exps:
-                    st.error("No expiration dates could be extracted from contract symbols.")
+                expiry_date_str = st.selectbox("Select an Exp. Date:", options=available_dates, key="dashboard_expiry_main")
+                calls, puts = fetch_data_with_cache(ticker, expiry_date_str, "dashboard")
+                if calls.empty and puts.empty:
+                    st.warning("No options data available for this ticker.")
                 else:
-                    unique_exps_str = [d.strftime("%Y-%m-%d") for d in unique_exps]
-                    expiry_date_str = st.selectbox("Select an Expiry Date:", options=unique_exps_str, key="dashboard_expiry")
+                    combined = pd.concat([calls, puts])
+                    combined = combined.dropna(subset=['extracted_expiry'])
                     selected_expiry = datetime.strptime(expiry_date_str, "%Y-%m-%d").date()
                     calls = calls[calls['extracted_expiry'] == selected_expiry]
                     puts = puts[puts['extracted_expiry'] == selected_expiry]
@@ -1062,7 +1023,7 @@ elif st.session_state.current_page == "Dashboard":
                                 if options_df.empty:
                                     st.warning("Intraday Data will display near market open.")
                                 else:
-                                    top5 = options_df.nlargest(7, 'GEX')[['strike', 'GEX', 'OptionType']]
+                                    top5 = options_df.nlargest(5, 'GEX')[['strike', 'GEX', 'OptionType']]
                                     
                                     # Find max GEX value for color scaling
                                     max_gex = abs(top5['GEX']).max()
@@ -1147,19 +1108,18 @@ elif st.session_state.current_page == "Charm Exposure":
         save_ticker(user_ticker)  # Save the ticker
         
         if ticker:
-            calls, puts = fetch_data_with_cache(ticker, "charm_exposure")
-            if calls.empty and puts.empty:
+            stock = yf.Ticker(ticker)
+            available_dates = stock.options
+            if not available_dates:
                 st.warning("No options data available for this ticker.")
             else:
-                combined = pd.concat([calls, puts])
-                combined = combined.dropna(subset=['extracted_expiry'])
-                unique_exps = sorted({d for d in combined['extracted_expiry'].unique() if d is not None and validate_expiry(d)})
-                
-                if not unique_exps:
-                    st.error("No expiration dates could be extracted from contract symbols.")
+                expiry_date_str = st.selectbox("Select an Exp. Date:", options=available_dates, key="charm_expiry_main")
+                calls, puts = fetch_data_with_cache(ticker, expiry_date_str, "charm_exposure")
+                if calls.empty and puts.empty:
+                    st.warning("No options data available for this ticker.")
                 else:
-                    unique_exps_str = [d.strftime("%Y-%m-%d") for d in unique_exps]
-                    expiry_date_str = st.selectbox("Select an Expiry Date:", options=unique_exps_str, key="charm_expiry")
+                    combined = pd.concat([calls, puts])
+                    combined = combined.dropna(subset=['extracted_expiry'])
                     selected_expiry = datetime.strptime(expiry_date_str, "%Y-%m-%d").date()
                     calls = calls[calls['extracted_expiry'] == selected_expiry]
                     puts = puts[puts['extracted_expiry'] == selected_expiry]
