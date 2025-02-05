@@ -2,6 +2,8 @@
 
 A real-time options analysis tool that provides interactive visualizations of options data, greeks, and market indicators.
 
+![Ez Options Dashboard](https://i.imgur.com/8hT2LZ4.png)
+
 ## Quick Start
 
 ### Windows Users:

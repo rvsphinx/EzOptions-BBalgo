@@ -897,7 +897,7 @@ elif st.session_state.current_page == "Dashboard":
                             t = t_days / 365.0
                             st.markdown(f"**Time to Expiration (t in years):** {t:.4f}")
                             
-                            # Compute Greeks for Gamma, Vanna, and Delta
+                            # Compute Greeks for Gamma, Vanna, Delta, and Charm
                             def compute_greeks(row, flag, greek_type):
                                 sigma = row.get("impliedVolatility", None)
                                 if sigma is None or sigma <= 0:
@@ -913,6 +913,16 @@ elif st.session_state.current_page == "Dashboard":
                                 except Exception:
                                     return None
                             
+                            def compute_charm(row, flag):
+                                sigma = row.get("impliedVolatility", None)
+                                if sigma is None or sigma <= 0:
+                                    return None
+                                try:
+                                    charm_val = calculate_charm(flag, S, row["strike"], t, sigma)
+                                    return charm_val
+                                except Exception:
+                                    return None
+                            
                             calls = calls.copy()
                             puts = puts.copy()
                             calls["calc_gamma"] = calls.apply(lambda row: compute_greeks(row, "c", "gamma"), axis=1)
@@ -921,9 +931,11 @@ elif st.session_state.current_page == "Dashboard":
                             puts["calc_vanna"] = puts.apply(lambda row: compute_greeks(row, "p", "vanna"), axis=1)
                             calls["calc_delta"] = calls.apply(lambda row: compute_greeks(row, "c", "delta"), axis=1)
                             puts["calc_delta"] = puts.apply(lambda row: compute_greeks(row, "p", "delta"), axis=1)
+                            calls["calc_charm"] = calls.apply(lambda row: compute_charm(row, "c"), axis=1)
+                            puts["calc_charm"] = puts.apply(lambda row: compute_charm(row, "p"), axis=1)
                             
-                            calls = calls.dropna(subset=["calc_gamma", "calc_vanna", "calc_delta"])
-                            puts = puts.dropna(subset=["calc_gamma", "calc_vanna", "calc_delta"])
+                            calls = calls.dropna(subset=["calc_gamma", "calc_vanna", "calc_delta", "calc_charm"])
+                            puts = puts.dropna(subset=["calc_gamma", "calc_vanna", "calc_delta", "calc_charm"])
                             
                             calls["GEX"] = calls["calc_gamma"] * calls["openInterest"] * 100
                             puts["GEX"] = puts["calc_gamma"] * puts["openInterest"] * 100
@@ -931,8 +943,10 @@ elif st.session_state.current_page == "Dashboard":
                             puts["VEX"] = puts["calc_vanna"] * puts["openInterest"] * 100
                             calls["DEX"] = calls["calc_delta"] * calls["openInterest"] * 100
                             puts["DEX"] = puts["calc_delta"] * puts["openInterest"] * 100
+                            calls["Charm"] = calls["calc_charm"] * calls["openInterest"] * 100
+                            puts["Charm"] = puts["calc_charm"] * puts["openInterest"] * 100
                             
-                            # Create bar charts for Gamma, Vanna, and Delta
+                            # Create bar charts for Gamma, Vanna, Delta, and Charm
                             def create_exposure_bar_chart(calls, puts, exposure_type, title):
                                 # Filter out zero values
                                 calls_df = calls[['strike', exposure_type]].copy()
@@ -977,6 +991,7 @@ elif st.session_state.current_page == "Dashboard":
                             fig_gamma = create_exposure_bar_chart(calls, puts, "GEX", "Gamma Exposure by Strike")
                             fig_vanna = create_exposure_bar_chart(calls, puts, "VEX", "Vanna Exposure by Strike")
                             fig_delta = create_exposure_bar_chart(calls, puts, "DEX", "Delta Exposure by Strike")
+                            fig_charm = create_exposure_bar_chart(calls, puts, "Charm", "Charm Exposure by Strike")
                             
                             # Intraday price chart
                             intraday_data = stock.history(period="1d", interval="1m")
@@ -1090,11 +1105,14 @@ elif st.session_state.current_page == "Dashboard":
                             # Display charts in four quadrants
                             st.plotly_chart(fig_intraday, use_container_width=True, key="Dashboard_intraday_chart")
                             col1, col2 = st.columns(2)
+                            col3 = st.container()
                             with col1:
                                 st.plotly_chart(fig_gamma, use_container_width=True, key="Dashboard_gamma_chart")
                                 st.plotly_chart(fig_vanna, use_container_width=True, key="Dashboard_vanna_chart")
                             with col2:
                                 st.plotly_chart(fig_delta, use_container_width=True, key="Dashboard_delta_chart")
+                                st.plotly_chart(fig_charm, use_container_width=True, key="Dashboard_charm_chart")
+                            with col3:
                                 st.plotly_chart(fig_volume_ratio, use_container_width=True, key="Dashboard_volume_ratio_chart")
 
 
