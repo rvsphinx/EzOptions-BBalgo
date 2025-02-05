@@ -928,7 +928,7 @@ elif st.session_state.current_page == "Dashboard":
                                     return speed_val
                                 except Exception:
                                     return None
-                            
+                                
                             def compute_vomma(row, flag):
                                 sigma = row.get("impliedVolatility", None)
                                 if sigma is None or sigma <= 0:
@@ -978,7 +978,7 @@ elif st.session_state.current_page == "Dashboard":
                                 calls_df['OptionType'] = 'Call'
                                 
                                 puts_df = puts[['strike', exposure_type]].copy()
-                                puts_df = puts_df[puts_df[exposure_type] != 0]
+                                puts_df = puts_df[puts[exposure_type] != 0]
                                 puts_df['OptionType'] = 'Put'
                                 
                                 combined_chart = pd.concat([calls_df, puts_df], ignore_index=True)
