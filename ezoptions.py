@@ -349,6 +349,23 @@ def calculate_speed(flag, S, K, t, sigma):
         st.error(f"Error calculating speed: {e}")
         return None
 
+# Add vomma calculation function
+def calculate_vomma(flag, S, K, t, sigma):
+    """
+    Calculate vomma (DvegaDvol) for an option.
+    """
+    try:
+        # Add a small offset to prevent division by zero
+        t = max(t, 1/1440)  # Minimum 1 minute expressed in years
+        d1 = (log(S / K) + (0.5 * sigma**2) * t) / (sigma * sqrt(t))
+        d2 = d1 - sigma * sqrt(t)
+        vega_val = bs_vega(flag, S, K, t, 0, sigma)  # Risk-free rate set to 0
+        vomma = vega_val * (d1 * d2 / sigma)
+        return vomma
+    except Exception as e:
+        st.error(f"Error calculating vomma: {e}")
+        return None
+
 # =========================================
 # 4) Streamlit App Navigation
 # =========================================
@@ -402,6 +419,10 @@ def safe_rerun():
 def save_ticker(ticker):
     st.session_state.saved_ticker = ticker
 
+# Add a function to save the expiration date
+def save_expiry_date(expiry_date):
+    st.session_state.saved_expiry_date = expiry_date
+
 def manual_refresh():
     """Manual refresh button to rerun the app"""
     if st.button("Refresh"):
@@ -409,15 +430,16 @@ def manual_refresh():
 
 st.sidebar.title("Navigation")
 pages = ["Dashboard", "Volume Ratio", "OI & Volume", "Gamma Exposure", "Delta Exposure", 
-         "Vanna Exposure", "Charm Exposure", "Speed Exposure", "Calculated Greeks"]
+         "Vanna Exposure", "Charm Exposure", "Speed Exposure", "Vomma Exposure", "Calculated Greeks"]
 
 new_page = st.sidebar.radio("Select a page:", pages)
 
 if handle_page_change(new_page):
     safe_rerun()
 
-# Use the saved ticker if available
+# Use the saved ticker and expiry date if available
 saved_ticker = st.session_state.get("saved_ticker", "SPY")
+saved_expiry_date = st.session_state.get("saved_expiry_date", None)
 
 def validate_expiry(expiry_date):
     """Helper function to validate expiration dates"""
@@ -458,7 +480,7 @@ def compute_greeks_and_charts(ticker, expiry_date_str, page_key):
 
     t = t_days / 365.0
 
-    # Compute Greeks for Gamma, Vanna, Delta, Charm, and Speed
+    # Compute Greeks for Gamma, Vanna, Delta, Charm, Speed, and Vomma
     def compute_greeks(row, flag, greek_type):
         sigma = row.get("impliedVolatility", None)
         if sigma is None or sigma <= 0:
@@ -494,6 +516,16 @@ def compute_greeks_and_charts(ticker, expiry_date_str, page_key):
         except Exception:
             return None
 
+    def compute_vomma(row, flag):
+        sigma = row.get("impliedVolatility", None)
+        if sigma is None or sigma <= 0:
+            return None
+        try:
+            vomma_val = calculate_vomma(flag, S, row["strike"], t, sigma)
+            return vomma_val
+        except Exception:
+            return None
+
     calls = calls.copy()
     puts = puts.copy()
     calls["calc_gamma"] = calls.apply(lambda row: compute_greeks(row, "c", "gamma"), axis=1)
@@ -506,9 +538,11 @@ def compute_greeks_and_charts(ticker, expiry_date_str, page_key):
     puts["calc_charm"] = puts.apply(lambda row: compute_charm(row, "p"), axis=1)
     calls["calc_speed"] = calls.apply(lambda row: compute_speed(row, "c"), axis=1)
     puts["calc_speed"] = puts.apply(lambda row: compute_speed(row, "p"), axis=1)
+    calls["calc_vomma"] = calls.apply(lambda row: compute_vomma(row, "c"), axis=1)
+    puts["calc_vomma"] = puts.apply(lambda row: compute_vomma(row, "p"), axis=1)
 
-    calls = calls.dropna(subset=["calc_gamma", "calc_vanna", "calc_delta", "calc_charm", "calc_speed"])
-    puts = puts.dropna(subset=["calc_gamma", "calc_vanna", "calc_delta", "calc_charm", "calc_speed"])
+    calls = calls.dropna(subset=["calc_gamma", "calc_vanna", "calc_delta", "calc_charm", "calc_speed", "calc_vomma"])
+    puts = puts.dropna(subset=["calc_gamma", "calc_vanna", "calc_delta", "calc_charm", "calc_speed", "calc_vomma"])
 
     calls["GEX"] = calls["calc_gamma"] * calls["openInterest"] * 100
     puts["GEX"] = puts["calc_gamma"] * puts["openInterest"] * 100
@@ -520,6 +554,8 @@ def compute_greeks_and_charts(ticker, expiry_date_str, page_key):
     puts["Charm"] = puts["calc_charm"] * puts["openInterest"] * 100
     calls["Speed"] = calls["calc_speed"] * calls["openInterest"] * 100
     puts["Speed"] = puts["calc_speed"] * puts["openInterest"] * 100
+    calls["Vomma"] = calls["calc_vomma"] * calls["openInterest"] * 100
+    puts["Vomma"] = puts["calc_vomma"] * puts["openInterest"] * 100
 
     return calls, puts, S, t, selected_expiry, today
 
@@ -579,7 +615,8 @@ if st.session_state.current_page == "OI & Volume":
             if not available_dates:
                 st.warning("No options data available for this ticker.")
             else:
-                expiry_date_str = st.selectbox("Select an Exp. Date:", options=available_dates)
+                expiry_date_str = st.selectbox("Select an Exp. Date:", options=available_dates, index=available_dates.index(saved_expiry_date) if saved_expiry_date in available_dates else 0)
+                save_expiry_date(expiry_date_str)  # Save the expiry date
                 calls, puts = fetch_data_with_cache(ticker, expiry_date_str, "options_data")
                 if calls.empty and puts.empty:
                     st.warning("No options data available for this ticker.")
@@ -648,7 +685,8 @@ elif st.session_state.current_page == "Volume Ratio":
             if not available_dates:
                 st.warning("No options data available for this ticker.")
             else:
-                expiry_date_str = st.selectbox("Select an Exp. Date:", options=available_dates, key="volume_ratio_expiry_main")
+                expiry_date_str = st.selectbox("Select an Exp. Date:", options=available_dates, index=available_dates.index(saved_expiry_date) if saved_expiry_date in available_dates else 0, key="volume_ratio_expiry_main")
+                save_expiry_date(expiry_date_str)  # Save the expiry date
                 calls, puts = fetch_data_with_cache(ticker, expiry_date_str, "volume_ratio")
                 if calls.empty and puts.empty:
                     st.warning("No options data available for this ticker.")
@@ -668,12 +706,12 @@ elif st.session_state.current_page == "Volume Ratio":
                         st.markdown(f"**Total Call Volume:** {call_volume}")
                         st.markdown(f"**Total Put Volume:** {put_volume}")
 
-elif st.session_state.current_page in ["Gamma Exposure", "Vanna Exposure", "Delta Exposure", "Charm Exposure", "Speed Exposure"]:
+elif st.session_state.current_page in ["Gamma Exposure", "Vanna Exposure", "Delta Exposure", "Charm Exposure", "Speed Exposure", "Vomma Exposure"]:
     exposure_container = st.container()
     with exposure_container:
         st.empty()  # Clear previous content
         manual_refresh()  # Add refresh button
-        page_name = st.session_state.current_page.split()[0].lower()  # gamma, vanna, delta, charm, or speed
+        page_name = st.session_state.current_page.split()[0].lower()  # gamma, vanna, delta, charm, speed, or vomma
         user_ticker = st.text_input(
             "Enter Stock Ticker (e.g., SPY, TSLA, SPX, NDX):", 
             saved_ticker, 
@@ -688,7 +726,8 @@ elif st.session_state.current_page in ["Gamma Exposure", "Vanna Exposure", "Delt
             if not available_dates:
                 st.warning("No options data available for this ticker.")
             else:
-                expiry_date_str = st.selectbox("Select an Exp. Date:", options=available_dates, key=f"{page_name}_expiry_main")
+                expiry_date_str = st.selectbox("Select an Exp. Date:", options=available_dates, index=available_dates.index(saved_expiry_date) if saved_expiry_date in available_dates else 0, key=f"{page_name}_expiry_main")
+                save_expiry_date(expiry_date_str)  # Save the expiry date
                 calls, puts, S, t, selected_expiry, today = compute_greeks_and_charts(ticker, expiry_date_str, f"{page_name}_exposure")
                 if calls is None or puts is None:
                     st.stop()
@@ -703,6 +742,8 @@ elif st.session_state.current_page in ["Gamma Exposure", "Vanna Exposure", "Delt
                     fig_bar = create_exposure_bar_chart(calls, puts, "Charm", "Charm Exposure by Strike", S)
                 elif st.session_state.current_page == "Speed Exposure":
                     fig_bar = create_exposure_bar_chart(calls, puts, "Speed", "Speed Exposure by Strike", S)
+                elif st.session_state.current_page == "Vomma Exposure":
+                    fig_bar = create_exposure_bar_chart(calls, puts, "Vomma", "Vomma Exposure by Strike", S)
                 
                 st.plotly_chart(fig_bar, use_container_width=True, key=f"{st.session_state.current_page}_bar_chart")
 
@@ -723,7 +764,8 @@ elif st.session_state.current_page == "Calculated Greeks":
             if not available_dates:
                 st.warning("No options data available for this ticker.")
             else:
-                expiry_date_str = st.selectbox("Select an Exp. Date:", options=available_dates, key="calculated_greeks_expiry_main")
+                expiry_date_str = st.selectbox("Select an Exp. Date:", options=available_dates, index=available_dates.index(saved_expiry_date) if saved_expiry_date in available_dates else 0, key="calculated_greeks_expiry_main")
+                save_expiry_date(expiry_date_str)  # Save the expiry date
                 calls, puts = fetch_data_with_cache(ticker, expiry_date_str, "calculated_greeks")
                 if calls.empty and puts.empty:
                     st.warning("No options data available for this ticker.")
@@ -823,7 +865,8 @@ elif st.session_state.current_page == "Dashboard":
             if not available_dates:
                 st.warning("No options data available for this ticker.")
             else:
-                expiry_date_str = st.selectbox("Select an Exp. Date:", options=available_dates, key="dashboard_expiry_main")
+                expiry_date_str = st.selectbox("Select an Exp. Date:", options=available_dates, index=available_dates.index(saved_expiry_date) if saved_expiry_date in available_dates else 0, key="dashboard_expiry_main")
+                save_expiry_date(expiry_date_str)  # Save the expiry date
                 calls, puts = fetch_data_with_cache(ticker, expiry_date_str, "dashboard")
                 if calls.empty and puts.empty:
                     st.warning("No options data available for this ticker.")
@@ -850,7 +893,7 @@ elif st.session_state.current_page == "Dashboard":
                             t = t_days / 365.0
                             st.markdown(f"**Time to Expiration (t in years):** {t:.4f}")
                             
-                            # Compute Greeks for Gamma, Vanna, Delta, and Charm
+                            # Compute Greeks for Gamma, Vanna, Delta, Charm, Speed, and Vomma
                             def compute_greeks(row, flag, greek_type):
                                 sigma = row.get("impliedVolatility", None)
                                 if sigma is None or sigma <= 0:
@@ -886,6 +929,16 @@ elif st.session_state.current_page == "Dashboard":
                                 except Exception:
                                     return None
                             
+                            def compute_vomma(row, flag):
+                                sigma = row.get("impliedVolatility", None)
+                                if sigma is None or sigma <= 0:
+                                    return None
+                                try:
+                                    vomma_val = calculate_vomma(flag, S, row["strike"], t, sigma)
+                                    return vomma_val
+                                except Exception:
+                                    return None
+                            
                             calls = calls.copy()
                             puts = puts.copy()
                             calls["calc_gamma"] = calls.apply(lambda row: compute_greeks(row, "c", "gamma"), axis=1)
@@ -898,9 +951,11 @@ elif st.session_state.current_page == "Dashboard":
                             puts["calc_charm"] = puts.apply(lambda row: compute_charm(row, "p"), axis=1)
                             puts["calc_speed"] = puts.apply(lambda row: compute_speed(row, "p"), axis=1)
                             calls["calc_speed"] = calls.apply(lambda row: compute_speed(row, "c"), axis=1)
+                            calls["calc_vomma"] = calls.apply(lambda row: compute_vomma(row, "c"), axis=1)
+                            puts["calc_vomma"] = puts.apply(lambda row: compute_vomma(row, "p"), axis=1)
                             
-                            calls = calls.dropna(subset=["calc_gamma", "calc_vanna", "calc_delta", "calc_charm", "calc_speed"])
-                            puts = puts.dropna(subset=["calc_gamma", "calc_vanna", "calc_delta", "calc_charm", "calc_speed"])
+                            calls = calls.dropna(subset=["calc_gamma", "calc_vanna", "calc_delta", "calc_charm", "calc_speed", "calc_vomma"])
+                            puts = puts.dropna(subset=["calc_gamma", "calc_vanna", "calc_delta", "calc_charm", "calc_speed", "calc_vomma"])
                             
                             calls["GEX"] = calls["calc_gamma"] * calls["openInterest"] * 100
                             puts["GEX"] = puts["calc_gamma"] * puts["openInterest"] * 100
@@ -912,8 +967,10 @@ elif st.session_state.current_page == "Dashboard":
                             puts["Charm"] = puts["calc_charm"] * puts["openInterest"] * 100
                             puts["Speed"] = puts["calc_speed"] * puts["openInterest"] * 100
                             calls["Speed"] = calls["calc_speed"] * calls["openInterest"] * 100
+                            calls["Vomma"] = calls["calc_vomma"] * calls["openInterest"] * 100
+                            puts["Vomma"] = puts["calc_vomma"] * puts["openInterest"] * 100
                             
-                            # Create bar charts for Gamma, Vanna, Delta, and Charm
+                            # Create bar charts for Gamma, Vanna, Delta, Charm, Speed, and Vomma
                             def create_exposure_bar_chart(calls, puts, exposure_type, title):
                                 # Filter out zero values
                                 calls_df = calls[['strike', exposure_type]].copy()
@@ -960,6 +1017,7 @@ elif st.session_state.current_page == "Dashboard":
                             fig_delta = create_exposure_bar_chart(calls, puts, "DEX", "Delta Exposure by Strike")
                             fig_charm = create_exposure_bar_chart(calls, puts, "Charm", "Charm Exposure by Strike")
                             fig_speed = create_exposure_bar_chart(calls, puts, "Speed", "Speed Exposure by Strike")
+                            fig_vomma = create_exposure_bar_chart(calls, puts, "Vomma", "Vomma Exposure by Strike")
                             
                             # Intraday price chart
                             intraday_data = stock.history(period="1d", interval="1m")
@@ -1071,7 +1129,7 @@ elif st.session_state.current_page == "Dashboard":
                             fig_volume_ratio = create_donut_chart(call_volume, put_volume)
                             
                             # Multi-select for choosing charts to display
-                            chart_options = ["Intraday Price", "Gamma Exposure", "Vanna Exposure", "Delta Exposure", "Charm Exposure", "Speed Exposure", "Volume Ratio"]
+                            chart_options = ["Intraday Price", "Gamma Exposure", "Vanna Exposure", "Delta Exposure", "Charm Exposure", "Speed Exposure", "Vomma Exposure", "Volume Ratio"]
                             selected_charts = st.multiselect("Select charts to display:", chart_options, default=chart_options)
                             
                             # Display selected charts
@@ -1090,6 +1148,8 @@ elif st.session_state.current_page == "Dashboard":
                                 supplemental_charts.append(fig_charm)
                             if "Speed Exposure" in selected_charts:
                                 supplemental_charts.append(fig_speed)
+                            if "Vomma Exposure" in selected_charts:
+                                supplemental_charts.append(fig_vomma)
                             if "Volume Ratio" in selected_charts:
                                 supplemental_charts.append(fig_volume_ratio)
                             
@@ -1098,210 +1158,6 @@ elif st.session_state.current_page == "Dashboard":
                                 cols = st.columns(2)
                                 for j, chart in enumerate(supplemental_charts[i:i+2]):
                                     cols[j].plotly_chart(chart, use_container_width=True)
-
-elif st.session_state.current_page == "Charm Exposure":
-    main_container = st.container()
-    with main_container:
-        st.empty()
-        manual_refresh()  # Add refresh button
-        user_ticker = st.text_input("Enter Stock Ticker (e.g., SPY, TSLA, SPX, NDX):", saved_ticker, key="charm_exposure_ticker")
-        ticker = format_ticker(user_ticker)
-        save_ticker(user_ticker)  # Save the ticker
-        
-        if ticker:
-            stock = yf.Ticker(ticker)
-            available_dates = stock.options
-            if not available_dates:
-                st.warning("No options data available for this ticker.")
-            else:
-                expiry_date_str = st.selectbox("Select an Exp. Date:", options=available_dates, key="charm_expiry_main")
-                calls, puts = fetch_data_with_cache(ticker, expiry_date_str, "charm_exposure")
-                if calls.empty and puts.empty:
-                    st.warning("No options data available for this ticker.")
-                else:
-                    combined = pd.concat([calls, puts])
-                    combined = combined.dropna(subset=['extracted_expiry'])
-                    selected_expiry = datetime.strptime(expiry_date_str, "%Y-%m-%d").date()
-                    calls = calls[calls['extracted_expiry'] == selected_expiry]
-                    puts = puts[puts['extracted_expiry'] == selected_expiry]
-                    
-                    # Get underlying price
-                    stock = yf.Ticker(ticker)
-                    S = get_last_price(stock)
-                    if S is None:
-                        st.error("Could not fetch underlying price.")
-                    else:
-                        S = round(S, 2)
-                        st.markdown(f"**Underlying Price (S):** {S}")
-                        today = datetime.today().date()
-                        t_days = (selected_expiry - today).days
-                        if not is_valid_trading_day(selected_expiry, today):
-                            st.error("The selected expiration date is in the past!")
-                        else:
-                            t = t_days / 365.0
-                            st.markdown(f"**Time to Expiration (t in years):** {t:.4f}")
-                            
-                            def compute_charm(row, flag):
-                                sigma = row.get("impliedVolatility", None)
-                                if sigma is None or sigma <= 0:
-                                    return None
-                                try:
-                                    charm_val = calculate_charm(flag, S, row["strike"], t, sigma)
-                                    return charm_val
-                                except Exception:
-                                    return None
-                            
-                            calls = calls.copy()
-                            puts = puts.copy()
-                            calls["calc_charm"] = calls.apply(lambda row: compute_charm(row, "c"), axis=1)
-                            puts["calc_charm"] = puts.apply(lambda row: compute_charm(row, "p"), axis=1)
-                            
-                            calls = calls.dropna(subset=["calc_charm"])
-                            puts = puts.dropna(subset=["calc_charm"])
-                            
-                            calls["Charm"] = calls["calc_charm"] * calls["openInterest"] * 100
-                            puts["Charm"] = puts["calc_charm"] * puts["openInterest"] * 100
-                            
-                            def create_charm_bar_chart(calls, puts):
-                                calls_df = calls[['strike', 'Charm']].copy()
-                                calls_df['OptionType'] = 'Call'
-                                puts_df = puts[['strike', 'Charm']].copy()
-                                puts_df['OptionType'] = 'Put'
-                                combined_chart = pd.concat([calls_df, puts_df], ignore_index=True)
-                                combined_chart = combined_chart[combined_chart['Charm'] != 0]  # Exclude values of 0
-                                combined_chart.sort_values(by='strike', inplace=True)
-                                
-                                fig = px.bar(
-                                    combined_chart,
-                                    x='strike',
-                                    y='Charm',
-                                    color='OptionType',
-                                    title='Charm Exposure by Strike',
-                                    barmode='group',
-                                    color_discrete_map={'Call': 'green', 'Put': 'darkred'}  # Update colors
-                                )
-                                fig.update_layout(
-                                    xaxis_title='Strike Price',
-                                    yaxis_title='Charm Exposure',
-                                    hovermode='x unified'
-                                )
-                                fig.update_xaxes(rangeslider=dict(visible=True))
-                                
-                                # Zoom into the range around the current price
-                                zoom_range = 0.1 * S  # 10% of the current price
-                                min_strike = max(S - zoom_range, combined_chart['strike'].min())
-                                max_strike = min(S + zoom_range, combined_chart['strike'].max())
-                                
-                                fig.update_xaxes(range=[min_strike, max_strike])
-                                
-                                fig = add_current_price_line(fig, S)  # Add price line
-                                
-                                return fig
-                            
-                            fig_bar = create_charm_bar_chart(calls, puts)
-                            st.plotly_chart(fig_bar, use_container_width=True, key=f"Charm Exposure_bar_chart")
-
-elif st.session_state.current_page == "Speed Exposure":
-    main_container = st.container()
-    with main_container:
-        st.empty()
-        manual_refresh()  # Add refresh button
-        user_ticker = st.text_input("Enter Stock Ticker (e.g., SPY, TSLA, SPX, NDX):", saved_ticker, key="speed_exposure_ticker")
-        ticker = format_ticker(user_ticker)
-        save_ticker(user_ticker)  # Save the ticker
-        
-        if ticker:
-            stock = yf.Ticker(ticker)
-            available_dates = stock.options
-            if not available_dates:
-                st.warning("No options data available for this ticker.")
-            else:
-                expiry_date_str = st.selectbox("Select an Exp. Date:", options=available_dates, key="speed_expiry_main")
-                calls, puts = fetch_data_with_cache(ticker, expiry_date_str, "speed_exposure")
-                if calls.empty and puts.empty:
-                    st.warning("No options data available for this ticker.")
-                else:
-                    combined = pd.concat([calls, puts])
-                    combined = combined.dropna(subset=['extracted_expiry'])
-                    selected_expiry = datetime.strptime(expiry_date_str, "%Y-%m-%d").date()
-                    calls = calls[calls['extracted_expiry'] == selected_expiry]
-                    puts = puts[puts['extracted_expiry'] == selected_expiry]
-                    
-                    # Get underlying price
-                    stock = yf.Ticker(ticker)
-                    S = get_last_price(stock)
-                    if S is None:
-                        st.error("Could not fetch underlying price.")
-                    else:
-                        S = round(S, 2)
-                        st.markdown(f"**Underlying Price (S):** {S}")
-                        today = datetime.today().date()
-                        t_days = (selected_expiry - today).days
-                        if not is_valid_trading_day(selected_expiry, today):
-                            st.error("The selected expiration date is in the past!")
-                        else:
-                            t = t_days / 365.0
-                            st.markdown(f"**Time to Expiration (t in years):** {t:.4f}")
-                            
-                            def compute_speed(row, flag):
-                                sigma = row.get("impliedVolatility", None)
-                                if sigma is None or sigma <= 0:
-                                    return None
-                                try:
-                                    speed_val = calculate_speed(flag, S, row["strike"], t, sigma)
-                                    return speed_val
-                                except Exception:
-                                    return None
-                            
-                            calls = calls.copy()
-                            puts = puts.copy()
-                            calls["calc_speed"] = calls.apply(lambda row: compute_speed(row, "c"), axis=1)
-                            puts["calc_speed"] = puts.apply(lambda row: compute_speed(row, "p"), axis=1)
-                            
-                            calls = calls.dropna(subset=["calc_speed"])
-                            puts = puts.dropna(subset=["calc_speed"])
-                            
-                            calls["Speed"] = calls["calc_speed"] * calls["openInterest"] * 100
-                            puts["Speed"] = puts["calc_speed"] * puts["openInterest"] * 100
-                            
-                            def create_speed_bar_chart(calls, puts):
-                                calls_df = calls[['strike', 'Speed']].copy()
-                                calls_df['OptionType'] = 'Call'
-                                puts_df = puts[['strike', 'Speed']].copy()
-                                puts_df['OptionType'] = 'Put'
-                                combined_chart = pd.concat([calls_df, puts_df], ignore_index=True)
-                                combined_chart = combined_chart[combined_chart['Speed'] != 0]  # Exclude values of 0
-                                combined_chart.sort_values(by='strike', inplace=True)
-                                
-                                fig = px.bar(
-                                    combined_chart,
-                                    x='strike',
-                                    y='Speed',
-                                    color='OptionType',
-                                    title='Speed Exposure by Strike',
-                                    barmode='group',
-                                    color_discrete_map={'Call': 'green', 'Put': 'darkred'}  # Update colors
-                                )
-                                fig.update_layout(
-                                    xaxis_title='Strike Price',
-                                    yaxis_title='Speed Exposure',
-                                    hovermode='x unified'
-                                )
-                                fig.update_xaxes(rangeslider=dict(visible=True))
-                                
-                                # Zoom into the range around the current price
-                                zoom_range = 0.1 * S  # 10% of the current price
-                                min_strike = max(S - zoom_range, combined_chart['strike'].min())
-                                max_strike = min(S + zoom_range, combined_chart['strike'].max())
-                                
-                                fig.update_xaxes(range=[min_strike, max_strike])
-                                
-                                fig = add_current_price_line(fig, S)  # Add price line
-                                
-                                return fig
-                            
-                            fig_bar = create_speed_bar_chart(calls, puts)
-                            st.plotly_chart(fig_bar, use_container_width=True, key=f"Speed Exposure_bar_chart")
 
 # -----------------------------------------
 # Auto-refresh
