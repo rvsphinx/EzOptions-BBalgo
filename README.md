@@ -1,9 +1,17 @@
 <div align="center">
   <h1>Ez Options</h1>
   <p>Unlock the power of options trading with Ez Options, a real-time analysis tool that provides interactive visualizations of options data, greeks, and market indicators. Whether you're a seasoned trader or just starting out, Ez Options helps you make informed decisions with its user-friendly interface and comprehensive data analysis.</p>
+  <a href="https://github.com/EazyDuz1t/EzOptions">
+    <img src="https://img.shields.io/github/stars/EazyDuz1t/EzOptions" alt="GitHub Repo stars"/>
+  </a>
+  <p>
+    <a href="https://discord.gg/QaDqgzrfz7">Join our Discord community!</a>
+  </p>
 </div>
 
-![Ez Options Dashboard](https://i.imgur.com/8hT2LZ4.png)
+<div align="center">
+  <img src="https://i.imgur.com/8hT2LZ4.png" width="400">
+</div>
 
 ## Table of Contents
 
