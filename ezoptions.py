@@ -204,11 +204,11 @@ def create_oi_volume_charts(calls, puts):
         color='OptionType',
         title='Open Interest by Strike',
         barmode='group',
-        color_discrete_map={'Call': 'green', 'Put': 'darkred'}  # Update colors
+        color_discrete_map={'Call': call_color, 'Put': put_color}  # Use custom colors
     )
     
     # Add Net OI trace as bar
-    fig_oi.add_trace(go.Bar(x=net_oi.index, y=net_oi.values, name='Net OI', marker=dict(color='orange')))
+    fig_oi.add_trace(go.Bar(x=net_oi.index, y=net_oi.values, name='Net OI', marker=dict(color=[call_color if val >= 0 else put_color for val in net_oi.values])))
     
     fig_oi.update_layout(
         xaxis_title='Strike Price',
@@ -224,11 +224,11 @@ def create_oi_volume_charts(calls, puts):
         color='OptionType',
         title='Volume by Strike',
         barmode='group',
-        color_discrete_map={'Call': 'green', 'Put': 'darkred'}  # Update colors
+        color_discrete_map={'Call': call_color, 'Put': put_color}  # Use custom colors
     )
     
     # Add Net Volume trace as bar
-    fig_volume.add_trace(go.Bar(x=net_volume.index, y=net_volume.values, name='Net Volume', marker=dict(color='orange')))
+    fig_volume.add_trace(go.Bar(x=net_volume.index, y=net_volume.values, name='Net Volume', marker=dict(color=[call_color if val >= 0 else put_color for val in net_volume.values])))
     
     fig_volume.update_layout(
         xaxis_title='Strike Price',
@@ -252,7 +252,7 @@ def create_donut_chart(call_volume, put_volume):
         title_text='Call vs Put Volume Ratio',
         showlegend=True
     )
-    fig.update_traces(hoverinfo='label+percent+value', marker=dict(colors=['green', 'darkred']))  # Update colors
+    fig.update_traces(hoverinfo='label+percent+value', marker=dict(colors=[call_color, put_color]))  # Use custom colors
     return fig
 
 # Greek Calculations
@@ -364,10 +364,19 @@ def is_valid_trading_day(expiry_date, current_date):
 #Streamlit UI
 st.title("Ez Options Stock Data")
 
+# Modify the reset_session_state function to preserve color settings
 def reset_session_state():
     """Reset all session state variables except for essential ones"""
     # Keep track of keys we want to preserve
-    preserved_keys = {'current_page', 'initialized', 'saved_ticker'}  # added saved_ticker
+    preserved_keys = {
+        'current_page', 
+        'initialized', 
+        'saved_ticker', 
+        'saved_expiry_date',
+        'call_color',  # Add color settings to preserved keys
+        'put_color'
+    }
+    
     preserved_values = {key: st.session_state[key] 
                        for key in preserved_keys 
                        if key in st.session_state}
@@ -378,7 +387,7 @@ def reset_session_state():
             try:
                 del st.session_state[key]
             except KeyError:
-                pass  # Ignore if key doesn't exist
+                pass
     
     # Restore preserved values
     for key, value in preserved_values.items():
@@ -414,6 +423,24 @@ new_page = st.sidebar.radio("Select a page:", pages)
 if handle_page_change(new_page):
      st.rerun()
 
+# Add after st.sidebar.title("Navigation")
+with st.sidebar.expander("Chart Settings", expanded=False):
+    # Initialize session state colors if not already set
+    if 'call_color' not in st.session_state:
+        st.session_state.call_color = '#00FF00'  # Default green for calls
+    if 'put_color' not in st.session_state:
+        st.session_state.put_color = '#FF0000'  # Default red for puts
+
+    # Color pickers
+    call_color = st.color_picker("Calls", st.session_state.call_color)
+    put_color = st.color_picker("Puts", st.session_state.put_color)
+
+    # Update session state when colors change
+    if call_color != st.session_state.call_color:
+        st.session_state.call_color = call_color
+    if put_color != st.session_state.put_color:
+        st.session_state.put_color = put_color
+
 # Use the saved ticker and expiry date if available
 saved_ticker = st.session_state.get("saved_ticker", "")
 saved_expiry_date = st.session_state.get("saved_expiry_date", None)
@@ -423,9 +450,8 @@ def validate_expiry(expiry_date):
     if expiry_date is None:
         return False
     try:
-        # For future dates, ensure they're treated as valid
         current_market_date = datetime.now().date()
-        # Return True if expiry is today or in the future
+        # For future dates, ensure they're treated as valid
         return expiry_date >= current_market_date
     except Exception:
         return False
@@ -580,11 +606,17 @@ def create_exposure_bar_chart(calls, puts, exposure_type, title, S):
         color='OptionType',
         title=title,
         barmode='group',
-        color_discrete_map={'Call': 'green', 'Put': 'darkred'}
+        color_discrete_map={'Call': call_color, 'Put': put_color}  # Use custom colors
     )
 
-    # Add Net Exposure bar
-    fig.add_trace(go.Bar(x=net_exposure.index, y=net_exposure.values, name='Net', marker=dict(color='orange')))
+    # Add Net Exposure bar with conditional coloring
+    net_colors = [call_color if val >= 0 else put_color for val in net_exposure.values]
+    fig.add_trace(go.Bar(
+        x=net_exposure.index, 
+        y=net_exposure.values, 
+        name='Net', 
+        marker=dict(color=net_colors)
+    ))
 
     fig.update_layout(
         xaxis_title='Strike Price',
@@ -958,9 +990,13 @@ elif st.session_state.current_page == "Dashboard":
                                     if not pd.isna(intensity) and 0 <= intensity <= 1:
                                         # Create RGB color based on option type and intensity
                                         if row.OptionType == 'Call':
-                                            color = f'rgba(0, {int(255 * intensity)}, 0, 0.9)'  # Increased opacity to 0.9
+                                            base_color = call_color
                                         else:
-                                            color = f'rgba({int(255 * intensity)}, 0, 0, 0.9)'  # Increased opacity to 0.9
+                                            base_color = put_color
+                                            
+                                        # Convert hex to RGB and apply intensity
+                                        rgb = tuple(int(base_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
+                                        color = f'rgba({rgb[0]}, {rgb[1]}, {rgb[2]}, {intensity})'
                                         
                                         # Add horizontal line
                                         fig_intraday.add_shape(
