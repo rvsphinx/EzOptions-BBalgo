@@ -30,11 +30,13 @@ def format_ticker(ticker):
         return "^VIX"
     return ticker
 
+@st.cache_data(ttl=10)
 def fetch_options_for_date(ticker, date):
     """
     Fetches option chains for the given ticker and date.
     Returns two DataFrames: one for calls and one for puts.
     """
+    print(f"Fetching option chain for {ticker} EXP {date}")
     stock = yf.Ticker(ticker)
     try:
         chain = stock.option_chain(date)
@@ -44,30 +46,8 @@ def fetch_options_for_date(ticker, date):
         puts['extracted_expiry'] = puts['contractSymbol'].apply(extract_expiry_from_contract)
         return calls, puts
     except Exception as e:
-        st.error(f"Error fetching options for date {date}: {e}")
+        st.error(f"Error fetching options chain for date {date}: {e}")
         return pd.DataFrame(), pd.DataFrame()
-
-def fetch_data_with_cache(ticker, date, key_prefix):
-    """Helper function to fetch data with caching"""
-    current_time = time.time()
-    last_fetch_time_key = f"{key_prefix}_last_fetch_time"
-    data_key = f"{key_prefix}_data"
-    last_ticker_key = f"{key_prefix}_last_ticker"
-    last_date_key = f"{key_prefix}_last_date"
-    
-    if (last_fetch_time_key not in st.session_state or 
-        current_time - st.session_state[last_fetch_time_key] > 30 or
-        st.session_state.get(last_ticker_key) != ticker or
-        st.session_state.get(last_date_key) != date):
-        calls, puts = fetch_options_for_date(ticker, date)
-        st.session_state[last_fetch_time_key] = current_time
-        st.session_state[data_key] = (calls, puts)
-        st.session_state[last_ticker_key] = ticker
-        st.session_state[last_date_key] = date
-    else:
-        calls, puts = st.session_state[data_key]
-    
-    return calls, puts
 
 def clear_page_state():
     """Clear all page-specific content and containers"""
@@ -116,13 +96,15 @@ def add_current_price_line(fig, current_price):
     return fig
 
 # -------------------------------
-# New function: Fetch all options and add extracted expiry column
+# Fetch all options experations and add extract expiry
 # -------------------------------
+@st.cache_data(ttl=10)
 def fetch_all_options(ticker):
     """
     Fetches option chains for all available expirations for the given ticker.
     Returns two DataFrames: one for calls and one for puts, with an added column 'extracted_expiry'.
     """
+    print(f"Fetching avaiable expirations for {ticker}")  # Add print statement
     stock = yf.Ticker(ticker)
     all_calls = []
     all_puts = []
@@ -182,15 +164,22 @@ def fetch_all_options(ticker):
     
     return combined_calls, combined_puts
 
-# =========================================
-# 2) Existing Visualization Functions
-# =========================================
-def create_oi_volume_charts(calls, puts):
-    # Get underlying price
+# Charts and price fetching
+@st.cache_data(ttl=10)
+def get_current_price(ticker):
+    """
+    Fetches the current price for the given ticker.
+    """
+    print(f"Fetching current price for {ticker}")
     stock = yf.Ticker(ticker)
     S = stock.info.get("regularMarketPrice")
     if S is None:
         S = stock.fast_info.get("lastPrice")
+    return S
+
+def create_oi_volume_charts(calls, puts):
+    # Get underlying price
+    S = get_current_price(ticker)
     if S is None:
         st.error("Could not fetch underlying price.")
         return
@@ -204,6 +193,10 @@ def create_oi_volume_charts(calls, puts):
     combined = pd.concat([calls_df, puts_df], ignore_index=True)
     combined.sort_values(by='strike', inplace=True)
     
+    # Calculate Net Open Interest and Net Volume
+    net_oi = calls.groupby('strike')['openInterest'].sum() - puts.groupby('strike')['openInterest'].sum()
+    net_volume = calls.groupby('strike')['volume'].sum() - puts.groupby('strike')['volume'].sum()
+    
     fig_oi = px.bar(
         combined,
         x='strike',
@@ -213,6 +206,10 @@ def create_oi_volume_charts(calls, puts):
         barmode='group',
         color_discrete_map={'Call': 'green', 'Put': 'darkred'}  # Update colors
     )
+    
+    # Add Net OI trace as bar
+    fig_oi.add_trace(go.Bar(x=net_oi.index, y=net_oi.values, name='Net OI', marker=dict(color='orange')))
+    
     fig_oi.update_layout(
         xaxis_title='Strike Price',
         yaxis_title='Open Interest',
@@ -229,6 +226,10 @@ def create_oi_volume_charts(calls, puts):
         barmode='group',
         color_discrete_map={'Call': 'green', 'Put': 'darkred'}  # Update colors
     )
+    
+    # Add Net Volume trace as bar
+    fig_volume.add_trace(go.Bar(x=net_volume.index, y=net_volume.values, name='Net Volume', marker=dict(color='orange')))
+    
     fig_volume.update_layout(
         xaxis_title='Strike Price',
         yaxis_title='Volume',
@@ -243,10 +244,6 @@ def create_oi_volume_charts(calls, puts):
     
     return fig_oi, fig_volume
 
-# Remove the create_heatmap function
-# def create_heatmap(calls, puts, value='volume'):
-#     # ...existing code...
-
 def create_donut_chart(call_volume, put_volume):
     labels = ['Calls', 'Puts']
     values = [call_volume, put_volume]
@@ -258,9 +255,7 @@ def create_donut_chart(call_volume, put_volume):
     fig.update_traces(hoverinfo='label+percent+value', marker=dict(colors=['green', 'darkred']))  # Update colors
     return fig
 
-# =========================================
-# 3) Greek Calculation Helper Function
-# =========================================
+# Greek Calculations
 def calculate_greeks(flag, S, K, t, sigma):
     """
     Calculate delta, gamma and vanna for an option.
@@ -280,8 +275,7 @@ def calculate_greeks(flag, S, K, t, sigma):
     except Exception as e:
         st.error(f"Error calculating greeks: {e}")
         return None, None, None
-
-# Add charm calculation function
+    
 def calculate_charm(flag, S, K, t, sigma):
     """
     Calculate charm (dDelta/dTime) for an option.
@@ -308,13 +302,7 @@ def calculate_charm(flag, S, K, t, sigma):
 # Add error handling for fetching the last price to avoid KeyError.
 def get_last_price(stock):
     """Helper function to get the last price of the stock."""
-    try:
-        S = stock.info.get("regularMarketPrice")
-        if S is None:
-            S = stock.fast_info.get("lastPrice")
-        return S
-    except KeyError:
-        return None
+    return get_current_price(stock.ticker)
 
 def validate_expiry(expiry_date):
     """Helper function to validate expiration dates"""
@@ -333,7 +321,6 @@ def is_valid_trading_day(expiry_date, current_date):
     days_difference = (expiry_date - current_date).days
     return days_difference >= -1
 
-# Add speed calculation function
 def calculate_speed(flag, S, K, t, sigma):
     """
     Calculate speed (DgammaDspot) for an option.
@@ -349,7 +336,6 @@ def calculate_speed(flag, S, K, t, sigma):
         st.error(f"Error calculating speed: {e}")
         return None
 
-# Add vomma calculation function
 def calculate_vomma(flag, S, K, t, sigma):
     """
     Calculate vomma (DvegaDvol) for an option.
@@ -366,9 +352,7 @@ def calculate_vomma(flag, S, K, t, sigma):
         st.error(f"Error calculating vomma: {e}")
         return None
 
-# =========================================
-# 4) Streamlit App Navigation
-# =========================================
+#Streamlit UI
 st.title("Ez Options Stock Data")
 
 def reset_session_state():
@@ -404,41 +388,25 @@ def handle_page_change(new_page):
     
     return False
 
-def safe_rerun():
-    """Helper function to handle rerun across different Streamlit versions"""
-    try:
-        st.rerun()
-    except AttributeError:
-        try:
-            st.experimental_rerun()
-        except AttributeError:
-            st.runtime.legacy_caching.clear_cache()
-            st.empty()
-
-# Add a function to save the ticker
+# Save selected ticker
 def save_ticker(ticker):
     st.session_state.saved_ticker = ticker
 
-# Add a function to save the expiration date
+# Save experation
 def save_expiry_date(expiry_date):
     st.session_state.saved_expiry_date = expiry_date
 
-def manual_refresh():
-    """Manual refresh button to rerun the app"""
-    if st.button("Refresh"):
-        safe_rerun()
-
 st.sidebar.title("Navigation")
 pages = ["Dashboard", "Volume Ratio", "OI & Volume", "Gamma Exposure", "Delta Exposure", 
-         "Vanna Exposure", "Charm Exposure", "Speed Exposure", "Vomma Exposure", "Calculated Greeks"]
+          "Vanna Exposure", "Charm Exposure", "Speed Exposure", "Vomma Exposure", "Calculated Greeks"]
 
 new_page = st.sidebar.radio("Select a page:", pages)
 
 if handle_page_change(new_page):
-    safe_rerun()
+     st.rerun()
 
 # Use the saved ticker and expiry date if available
-saved_ticker = st.session_state.get("saved_ticker", "SPY")
+saved_ticker = st.session_state.get("saved_ticker", "")
 saved_expiry_date = st.session_state.get("saved_expiry_date", None)
 
 def validate_expiry(expiry_date):
@@ -454,7 +422,7 @@ def validate_expiry(expiry_date):
         return False
 
 def compute_greeks_and_charts(ticker, expiry_date_str, page_key):
-    calls, puts = fetch_data_with_cache(ticker, expiry_date_str, page_key)
+    calls, puts = fetch_options_for_date(ticker, expiry_date_str)
     if calls.empty and puts.empty:
         st.warning("No options data available for this ticker.")
         return None, None, None, None, None, None
@@ -465,8 +433,7 @@ def compute_greeks_and_charts(ticker, expiry_date_str, page_key):
     calls = calls[calls['extracted_expiry'] == selected_expiry]
     puts = puts[puts['extracted_expiry'] == selected_expiry]
 
-    stock = yf.Ticker(ticker)
-    S = get_last_price(stock)
+    S = get_current_price(ticker)
     if S is None:
         st.error("Could not fetch underlying price.")
         return None, None, None, None, None, None
@@ -566,11 +533,14 @@ def create_exposure_bar_chart(calls, puts, exposure_type, title, S):
     calls_df['OptionType'] = 'Call'
 
     puts_df = puts[['strike', exposure_type]].copy()
-    puts_df = puts_df[puts_df[exposure_type] != 0]
+    puts_df = puts_df[puts[exposure_type] != 0]
     puts_df['OptionType'] = 'Put'
 
     combined_chart = pd.concat([calls_df, puts_df], ignore_index=True)
     combined_chart.sort_values(by='strike', inplace=True)
+
+    # Calculate Net Exposure
+    net_exposure = calls.groupby('strike')[exposure_type].sum() - puts.groupby('strike')[exposure_type].sum()
 
     fig = px.bar(
         combined_chart,
@@ -582,18 +552,18 @@ def create_exposure_bar_chart(calls, puts, exposure_type, title, S):
         color_discrete_map={'Call': 'green', 'Put': 'darkred'}
     )
 
+    # Add Net Exposure bar
+    fig.add_trace(go.Bar(x=net_exposure.index, y=net_exposure.values, name='Net', marker=dict(color='orange')))
+
     fig.update_layout(
         xaxis_title='Strike Price',
         yaxis_title=title,
         hovermode='x unified'
     )
 
-    fig.update_xaxes(rangeslider=dict(visible=True))
-
-    # Zoom into the range around the current price
-    zoom_range = 0.1 * S  # 10% of the current price
-    min_strike = max(S - zoom_range, combined_chart['strike'].min())
-    max_strike = min(S + zoom_range, combined_chart['strike'].max())
+    # Automatically adjust x-axis range
+    min_strike = combined_chart['strike'].min()
+    max_strike = combined_chart['strike'].max()
     fig.update_xaxes(range=[min_strike, max_strike])
 
     fig = add_current_price_line(fig, S)
@@ -604,11 +574,15 @@ if st.session_state.current_page == "OI & Volume":
     main_container = st.container()
     with main_container:
         st.empty()  # Clear previous content
-        manual_refresh()  # Add refresh button
         st.write("**Select filters below to see updated data, charts, and tables.**")
         user_ticker = st.text_input("Enter Stock Ticker (e.g., SPY, TSLA, SPX, NDX):", saved_ticker, key="options_data_ticker")
         ticker = format_ticker(user_ticker)
-        save_ticker(user_ticker)  # Save the ticker
+        
+        # Clear cache if ticker changes
+        if ticker != saved_ticker:
+            st.cache_data.clear()
+            save_ticker(ticker)  # Save the ticker
+        
         if ticker:
             stock = yf.Ticker(ticker)
             available_dates = stock.options
@@ -617,7 +591,7 @@ if st.session_state.current_page == "OI & Volume":
             else:
                 expiry_date_str = st.selectbox("Select an Exp. Date:", options=available_dates, index=available_dates.index(saved_expiry_date) if saved_expiry_date in available_dates else 0)
                 save_expiry_date(expiry_date_str)  # Save the expiry date
-                calls, puts = fetch_data_with_cache(ticker, expiry_date_str, "options_data")
+                calls, puts = fetch_options_for_date(ticker, expiry_date_str)
                 if calls.empty and puts.empty:
                     st.warning("No options data available for this ticker.")
                 else:
@@ -675,10 +649,14 @@ elif st.session_state.current_page == "Volume Ratio":
     main_container = st.container()
     with main_container:
         st.empty()  # Clear previous content
-        manual_refresh()  # Add refresh button
         user_ticker = st.text_input("Enter Stock Ticker (e.g., SPY, TSLA, SPX, NDX):", saved_ticker, key="volume_ratio_ticker")
         ticker = format_ticker(user_ticker)
-        save_ticker(user_ticker)  # Save the ticker
+        
+        # Clear cache if ticker changes
+        if ticker != saved_ticker:
+            st.cache_data.clear()
+            save_ticker(ticker)  # Save the ticker
+        
         if ticker:
             stock = yf.Ticker(ticker)
             available_dates = stock.options
@@ -687,7 +665,7 @@ elif st.session_state.current_page == "Volume Ratio":
             else:
                 expiry_date_str = st.selectbox("Select an Exp. Date:", options=available_dates, index=available_dates.index(saved_expiry_date) if saved_expiry_date in available_dates else 0, key="volume_ratio_expiry_main")
                 save_expiry_date(expiry_date_str)  # Save the expiry date
-                calls, puts = fetch_data_with_cache(ticker, expiry_date_str, "volume_ratio")
+                calls, puts = fetch_options_for_date(ticker, expiry_date_str)
                 if calls.empty and puts.empty:
                     st.warning("No options data available for this ticker.")
                 else:
@@ -710,7 +688,6 @@ elif st.session_state.current_page in ["Gamma Exposure", "Vanna Exposure", "Delt
     exposure_container = st.container()
     with exposure_container:
         st.empty()  # Clear previous content
-        manual_refresh()  # Add refresh button
         page_name = st.session_state.current_page.split()[0].lower()  # gamma, vanna, delta, charm, speed, or vomma
         user_ticker = st.text_input(
             "Enter Stock Ticker (e.g., SPY, TSLA, SPX, NDX):", 
@@ -718,7 +695,11 @@ elif st.session_state.current_page in ["Gamma Exposure", "Vanna Exposure", "Delt
             key=f"{page_name}_exposure_ticker"
         )
         ticker = format_ticker(user_ticker)
-        save_ticker(user_ticker)  # Save the ticker
+        
+        # Clear cache if ticker changes
+        if ticker != saved_ticker:
+            st.cache_data.clear()
+            save_ticker(ticker)  # Save the ticker
         
         if ticker:
             stock = yf.Ticker(ticker)
@@ -728,7 +709,7 @@ elif st.session_state.current_page in ["Gamma Exposure", "Vanna Exposure", "Delt
             else:
                 expiry_date_str = st.selectbox("Select an Exp. Date:", options=available_dates, index=available_dates.index(saved_expiry_date) if saved_expiry_date in available_dates else 0, key=f"{page_name}_expiry_main")
                 save_expiry_date(expiry_date_str)  # Save the expiry date
-                calls, puts, S, t, selected_expiry, today = compute_greeks_and_charts(ticker, expiry_date_str, f"{page_name}_exposure")
+                calls, puts, S, t, selected_expiry, today = compute_greeks_and_charts(ticker, expiry_date_str, page_name)
                 if calls is None or puts is None:
                     st.stop()
                 
@@ -751,12 +732,15 @@ elif st.session_state.current_page == "Calculated Greeks":
     main_container = st.container()
     with main_container:
         st.empty()  # Clear previous content
-        manual_refresh()  # Add refresh button
         st.write("This page calculates delta, gamma, and vanna based on market data.")
         
         user_ticker = st.text_input("Enter Stock Ticker (e.g., SPY, TSLA, SPX, NDX):", saved_ticker, key="calculated_greeks_ticker")
         ticker = format_ticker(user_ticker)
-        save_ticker(user_ticker)  # Save the ticker
+        
+        # Clear cache if ticker changes
+        if ticker != saved_ticker:
+            st.cache_data.clear()
+            save_ticker(ticker)  # Save the ticker
         
         if ticker:
             stock = yf.Ticker(ticker)
@@ -766,7 +750,7 @@ elif st.session_state.current_page == "Calculated Greeks":
             else:
                 expiry_date_str = st.selectbox("Select an Exp. Date:", options=available_dates, index=available_dates.index(saved_expiry_date) if saved_expiry_date in available_dates else 0, key="calculated_greeks_expiry_main")
                 save_expiry_date(expiry_date_str)  # Save the expiry date
-                calls, puts = fetch_data_with_cache(ticker, expiry_date_str, "calculated_greeks")
+                calls, puts = fetch_options_for_date(ticker, expiry_date_str)
                 if calls.empty and puts.empty:
                     st.warning("No options data available for this ticker.")
                     st.stop()
@@ -854,10 +838,13 @@ elif st.session_state.current_page == "Dashboard":
     main_container = st.container()
     with main_container:
         st.empty()
-        manual_refresh()  # Add refresh button
         user_ticker = st.text_input("Enter Stock Ticker (e.g., SPY, TSLA, SPX, NDX):", saved_ticker, key="dashboard_ticker")
         ticker = format_ticker(user_ticker)
-        save_ticker(user_ticker)  # Save the ticker
+        
+        # Clear cache if ticker changes
+        if ticker != saved_ticker:
+            st.cache_data.clear()
+            save_ticker(ticker)  # Save the ticker
         
         if ticker:
             stock = yf.Ticker(ticker)
@@ -867,297 +854,156 @@ elif st.session_state.current_page == "Dashboard":
             else:
                 expiry_date_str = st.selectbox("Select an Exp. Date:", options=available_dates, index=available_dates.index(saved_expiry_date) if saved_expiry_date in available_dates else 0, key="dashboard_expiry_main")
                 save_expiry_date(expiry_date_str)  # Save the expiry date
-                calls, puts = fetch_data_with_cache(ticker, expiry_date_str, "dashboard")
-                if calls.empty and puts.empty:
-                    st.warning("No options data available for this ticker.")
+                calls, puts, S, t, selected_expiry, today = compute_greeks_and_charts(ticker, expiry_date_str, "dashboard")
+                if calls is None or puts is None:
+                    st.stop()
+                
+                fig_gamma = create_exposure_bar_chart(calls, puts, "GEX", "Gamma Exposure by Strike", S)
+                fig_vanna = create_exposure_bar_chart(calls, puts, "VEX", "Vanna Exposure by Strike", S)
+                fig_delta = create_exposure_bar_chart(calls, puts, "DEX", "Delta Exposure by Strike", S)
+                fig_charm = create_exposure_bar_chart(calls, puts, "Charm", "Charm Exposure by Strike", S)
+                fig_speed = create_exposure_bar_chart(calls, puts, "Speed", "Speed Exposure by Strike", S)
+                fig_vomma = create_exposure_bar_chart(calls, puts, "Vomma", "Vomma Exposure by Strike", S)
+                
+                # Intraday price chart
+                intraday_data = stock.history(period="1d", interval="1m")
+                if intraday_data.empty:
+                    st.warning("No intraday data available for this ticker.")
                 else:
-                    combined = pd.concat([calls, puts])
-                    combined = combined.dropna(subset=['extracted_expiry'])
-                    selected_expiry = datetime.strptime(expiry_date_str, "%Y-%m-%d").date()
-                    calls = calls[calls['extracted_expiry'] == selected_expiry]
-                    puts = puts[puts['extracted_expiry'] == selected_expiry]
+                    # Initialize plot with cleared shapes/annotations
+                    fig_intraday = make_subplots(specs=[[{"secondary_y": True}]])
+                    fig_intraday.layout.shapes = []
+                    fig_intraday.layout.annotations = []
                     
-                    # Get underlying price
-                    stock = yf.Ticker(ticker)
-                    S = get_last_price(stock)
-                    if S is None:
-                        st.error("Could not fetch underlying price.")
+                    # Add price trace
+                    fig_intraday.add_trace(
+                        go.Scatter(
+                            x=intraday_data.index,
+                            y=intraday_data['Close'],
+                            name="Price",
+                            line=dict(color='gold')
+                        ),
+                        secondary_y=False
+                    )
+                    
+                    # Add current price annotation
+                    current_price = intraday_data['Close'].iloc[-1]
+                    fig_intraday.add_annotation(
+                        x=intraday_data.index[-1],
+                        y=current_price,
+                        xref='x',
+                        yref='y',
+                        xshift=27,
+                        showarrow=False,
+                        text=f"{current_price:,.2f}",
+                        font=dict(color='yellow', size=15)
+                    )
+                    
+                    # Process options data
+                    calls['OptionType'] = 'Call'
+                    puts['OptionType'] = 'Put'
+                    
+                    # Combine and filter GEX data
+                    options_df = pd.concat([calls, puts]).dropna(subset=['GEX'])
+                    added_strikes = set()
+                    
+                    if options_df.empty:
+                        st.warning("Intraday Data will display near market open.")
                     else:
-                        S = round(S, 2)
-                        st.markdown(f"**Underlying Price (S):** {S}")
-                        today = datetime.today().date()
-                        t_days = (selected_expiry - today).days
-                        if not is_valid_trading_day(selected_expiry, today):
-                            st.error("The selected expiration date is in the past!")
-                        else:
-                            t = t_days / 365.0
-                            st.markdown(f"**Time to Expiration (t in years):** {t:.4f}")
-                            
-                            # Compute Greeks for Gamma, Vanna, Delta, Charm, Speed, and Vomma
-                            def compute_greeks(row, flag, greek_type):
-                                sigma = row.get("impliedVolatility", None)
-                                if sigma is None or sigma <= 0:
-                                    return None
-                                try:
-                                    delta_val, gamma_val, vanna_val = calculate_greeks(flag, S, row["strike"], t, sigma)
-                                    if greek_type == "gamma":
-                                        return gamma_val
-                                    elif greek_type == "vanna":
-                                        return vanna_val
-                                    elif greek_type == "delta":
-                                        return delta_val
-                                except Exception:
-                                    return None
-                            
-                            def compute_charm(row, flag):
-                                sigma = row.get("impliedVolatility", None)
-                                if sigma is None or sigma <= 0:
-                                    return None
-                                try:
-                                    charm_val = calculate_charm(flag, S, row["strike"], t, sigma)
-                                    return charm_val
-                                except Exception:
-                                    return None
-                                
-                            def compute_speed(row, flag):
-                                sigma = row.get("impliedVolatility", None)
-                                if sigma is None or sigma <= 0:
-                                    return None
-                                try:
-                                    speed_val = calculate_speed(flag, S, row["strike"], t, sigma)
-                                    return speed_val
-                                except Exception:
-                                    return None
-                                
-                            def compute_vomma(row, flag):
-                                sigma = row.get("impliedVolatility", None)
-                                if sigma is None or sigma <= 0:
-                                    return None
-                                try:
-                                    vomma_val = calculate_vomma(flag, S, row["strike"], t, sigma)
-                                    return vomma_val
-                                except Exception:
-                                    return None
-                            
-                            calls = calls.copy()
-                            puts = puts.copy()
-                            calls["calc_gamma"] = calls.apply(lambda row: compute_greeks(row, "c", "gamma"), axis=1)
-                            puts["calc_gamma"] = puts.apply(lambda row: compute_greeks(row, "p", "gamma"), axis=1)
-                            calls["calc_vanna"] = calls.apply(lambda row: compute_greeks(row, "c", "vanna"), axis=1)
-                            puts["calc_vanna"] = puts.apply(lambda row: compute_greeks(row, "p", "vanna"), axis=1)
-                            calls["calc_delta"] = calls.apply(lambda row: compute_greeks(row, "c", "delta"), axis=1)
-                            puts["calc_delta"] = puts.apply(lambda row: compute_greeks(row, "p", "delta"), axis=1)
-                            calls["calc_charm"] = calls.apply(lambda row: compute_charm(row, "c"), axis=1)
-                            puts["calc_charm"] = puts.apply(lambda row: compute_charm(row, "p"), axis=1)
-                            puts["calc_speed"] = puts.apply(lambda row: compute_speed(row, "p"), axis=1)
-                            calls["calc_speed"] = calls.apply(lambda row: compute_speed(row, "c"), axis=1)
-                            calls["calc_vomma"] = calls.apply(lambda row: compute_vomma(row, "c"), axis=1)
-                            puts["calc_vomma"] = puts.apply(lambda row: compute_vomma(row, "p"), axis=1)
-                            
-                            calls = calls.dropna(subset=["calc_gamma", "calc_vanna", "calc_delta", "calc_charm", "calc_speed", "calc_vomma"])
-                            puts = puts.dropna(subset=["calc_gamma", "calc_vanna", "calc_delta", "calc_charm", "calc_speed", "calc_vomma"])
-                            
-                            calls["GEX"] = calls["calc_gamma"] * calls["openInterest"] * 100
-                            puts["GEX"] = puts["calc_gamma"] * puts["openInterest"] * 100
-                            calls["VEX"] = calls["calc_vanna"] * calls["openInterest"] * 100
-                            puts["VEX"] = puts["calc_vanna"] * puts["openInterest"] * 100
-                            calls["DEX"] = calls["calc_delta"] * calls["openInterest"] * 100
-                            puts["DEX"] = puts["calc_delta"] * puts["openInterest"] * 100
-                            calls["Charm"] = calls["calc_charm"] * calls["openInterest"] * 100
-                            puts["Charm"] = puts["calc_charm"] * puts["openInterest"] * 100
-                            puts["Speed"] = puts["calc_speed"] * puts["openInterest"] * 100
-                            calls["Speed"] = calls["calc_speed"] * calls["openInterest"] * 100
-                            calls["Vomma"] = calls["calc_vomma"] * calls["openInterest"] * 100
-                            puts["Vomma"] = puts["calc_vomma"] * puts["openInterest"] * 100
-                            
-                            # Create bar charts for Gamma, Vanna, Delta, Charm, Speed, and Vomma
-                            def create_exposure_bar_chart(calls, puts, exposure_type, title):
-                                # Filter out zero values
-                                calls_df = calls[['strike', exposure_type]].copy()
-                                calls_df = calls_df[calls_df[exposure_type] != 0]
-                                calls_df['OptionType'] = 'Call'
-                                
-                                puts_df = puts[['strike', exposure_type]].copy()
-                                puts_df = puts_df[puts[exposure_type] != 0]
-                                puts_df['OptionType'] = 'Put'
-                                
-                                combined_chart = pd.concat([calls_df, puts_df], ignore_index=True)
-                                combined_chart.sort_values(by='strike', inplace=True)
-                                
-                                fig = px.bar(
-                                    combined_chart,
-                                    x='strike',
-                                    y=exposure_type,
-                                    color='OptionType',
-                                    title=title,
-                                    barmode='group',
-                                    color_discrete_map={'Call': 'green', 'Put': 'darkred'}
-                                )
-                                
-                                fig.update_layout(
-                                    xaxis_title='Strike Price',
-                                    yaxis_title=title,
-                                    hovermode='x unified'
-                                )
-                                
-                                fig.update_xaxes(rangeslider=dict(visible=True))
-                                
-                                # Zoom into the range around the current price
-                                zoom_range = 0.1 * S  # 10% of the current price
-                                min_strike = max(S - zoom_range, combined_chart['strike'].min())
-                                max_strike = min(S + zoom_range, combined_chart['strike'].max())
-                                fig.update_xaxes(range=[min_strike, max_strike])
-                                
-                                fig = add_current_price_line(fig, S)
-                                
-                                return fig
-                            
-                            fig_gamma = create_exposure_bar_chart(calls, puts, "GEX", "Gamma Exposure by Strike")
-                            fig_vanna = create_exposure_bar_chart(calls, puts, "VEX", "Vanna Exposure by Strike")
-                            fig_delta = create_exposure_bar_chart(calls, puts, "DEX", "Delta Exposure by Strike")
-                            fig_charm = create_exposure_bar_chart(calls, puts, "Charm", "Charm Exposure by Strike")
-                            fig_speed = create_exposure_bar_chart(calls, puts, "Speed", "Speed Exposure by Strike")
-                            fig_vomma = create_exposure_bar_chart(calls, puts, "Vomma", "Vomma Exposure by Strike")
-                            
-                            # Intraday price chart
-                            intraday_data = stock.history(period="1d", interval="1m")
-                            if intraday_data.empty:
-                                st.warning("No intraday data available for this ticker.")
-                            else:
-                                # Initialize plot with cleared shapes/annotations
-                                fig_intraday = make_subplots(specs=[[{"secondary_y": True}]])
-                                fig_intraday.layout.shapes = []
-                                fig_intraday.layout.annotations = []
-                                
-                                # Add price trace
-                                fig_intraday.add_trace(
-                                    go.Scatter(
-                                        x=intraday_data.index,
-                                        y=intraday_data['Close'],
-                                        name="Price",
-                                        line=dict(color='gold')
-                                    ),
-                                    secondary_y=False
-                                )
-                                
-                                # Add current price annotation
-                                current_price = intraday_data['Close'].iloc[-1]
-                                fig_intraday.add_annotation(
-                                    x=intraday_data.index[-1],
-                                    y=current_price,
-                                    xref='x',
-                                    yref='y',
-                                    xshift=27,
-                                    showarrow=False,
-                                    text=f"{current_price:,.2f}",
-                                    font=dict(color='yellow', size=15)
-                                )
-                                
-                                # Process options data
-                                calls['OptionType'] = 'Call'
-                                puts['OptionType'] = 'Put'
-                                
-                                # Combine and filter GEX data
-                                options_df = pd.concat([calls, puts]).dropna(subset=['GEX'])
-                                added_strikes = set()
-                                
-                                if options_df.empty:
-                                    st.warning("Intraday Data will display near market open.")
-                                else:
-                                    top5 = options_df.nlargest(5, 'GEX')[['strike', 'GEX', 'OptionType']]
+                        top5 = options_df.nlargest(5, 'GEX')[['strike', 'GEX', 'OptionType']]
+                        
+                        # Find max GEX value for color scaling
+                        max_gex = abs(top5['GEX']).max()
+                        
+                        # Add GEX levels
+                        for row in top5.itertuples():
+                            if row.strike not in added_strikes:
+                                # Ensure intensity is not NaN and within valid range
+                                if not pd.isna(row.GEX) and row.GEX != 0:
+                                    # Modified color intensity calculation - now ranges from 0.4 to 1.0
+                                    intensity = 0.4 + (min(abs(row.GEX) / max_gex, 1.0) * 0.6)
                                     
-                                    # Find max GEX value for color scaling
-                                    max_gex = abs(top5['GEX']).max()
-                                    
-                                    # Add GEX levels
-                                    for row in top5.itertuples():
-                                        if row.strike not in added_strikes:
-                                            # Ensure intensity is not NaN and within valid range
-                                            if not pd.isna(row.GEX) and row.GEX != 0:
-                                                # Modified color intensity calculation - now ranges from 0.4 to 1.0
-                                                intensity = 0.4 + (min(abs(row.GEX) / max_gex, 1.0) * 0.6)
-                                                
-                                                # Ensure intensity is within valid range
-                                                if not pd.isna(intensity) and 0 <= intensity <= 1:
-                                                    # Create RGB color based on option type and intensity
-                                                    if row.OptionType == 'Call':
-                                                        color = f'rgba(0, {int(255 * intensity)}, 0, 0.9)'  # Increased opacity to 0.9
-                                                    else:
-                                                        color = f'rgba({int(255 * intensity)}, 0, 0, 0.9)'  # Increased opacity to 0.9
-                                                    
-                                                    # Add horizontal line
-                                                    fig_intraday.add_shape(
-                                                        type='line',
-                                                        x0=intraday_data.index[0],
-                                                        x1=intraday_data.index[-1],
-                                                        y0=row.strike,
-                                                        y1=row.strike,
-                                                        line=dict(color=color, width=2),
-                                                        xref='x',
-                                                        yref='y'
-                                                    )
-                                                    
-                                                    # Add GEX annotation with matching color
-                                                    fig_intraday.add_annotation(
-                                                        x=intraday_data.index[-1],
-                                                        y=row.strike,
-                                                        xref='x',
-                                                        yref='y',
-                                                        showarrow=True,
-                                                        arrowhead=1,
-                                                        text=f"GEX {row.GEX:,.0f}",
-                                                        font=dict(color=color),
-                                                        arrowcolor=color
-                                                    )
-                                                    
-                                                    added_strikes.add(row.strike)
-                                
-                                # Update layout
-                                fig_intraday.update_layout(
-                                    title=f"Intraday Price for {ticker}",
-                                    height=600,
-                                    hovermode='x unified',
-                                    margin=dict(r=150, l=50)
-                                )
-                                fig_intraday.update_xaxes(title_text="Time")
-                                fig_intraday.update_yaxes(title_text="Price", secondary_y=False)
+                                    # Ensure intensity is within valid range
+                                    if not pd.isna(intensity) and 0 <= intensity <= 1:
+                                        # Create RGB color based on option type and intensity
+                                        if row.OptionType == 'Call':
+                                            color = f'rgba(0, {int(255 * intensity)}, 0, 0.9)'  # Increased opacity to 0.9
+                                        else:
+                                            color = f'rgba({int(255 * intensity)}, 0, 0, 0.9)'  # Increased opacity to 0.9
+                                        
+                                        # Add horizontal line
+                                        fig_intraday.add_shape(
+                                            type='line',
+                                            x0=intraday_data.index[0],
+                                            x1=intraday_data.index[-1],
+                                            y0=row.strike,
+                                            y1=row.strike,
+                                            line=dict(color=color, width=2),
+                                            xref='x',
+                                            yref='y'
+                                        )
+                                        
+                                        # Add GEX annotation with matching color
+                                        fig_intraday.add_annotation(
+                                            x=intraday_data.index[-1],
+                                            y=row.strike,
+                                            xref='x',
+                                            yref='y',
+                                            showarrow=True,
+                                            arrowhead=1,
+                                            text=f"GEX {row.GEX:,.0f}",
+                                            font=dict(color=color),
+                                            arrowcolor=color
+                                        )
+                                        
+                                        added_strikes.add(row.strike)
+                    
+                    # Update layout
+                    fig_intraday.update_layout(
+                        title=f"Intraday Price for {ticker}",
+                        height=600,
+                        hovermode='x unified',
+                        margin=dict(r=150, l=50)
+                    )
+                    fig_intraday.update_xaxes(title_text="Time")
+                    fig_intraday.update_yaxes(title_text="Price", secondary_y=False)
 
-                            
-                            # Calculate volume ratio
-                            call_volume = calls['volume'].sum()
-                            put_volume = puts['volume'].sum()
-                            fig_volume_ratio = create_donut_chart(call_volume, put_volume)
-                            
-                            # Multi-select for choosing charts to display
-                            chart_options = ["Intraday Price", "Gamma Exposure", "Vanna Exposure", "Delta Exposure", "Charm Exposure", "Speed Exposure", "Vomma Exposure", "Volume Ratio"]
-                            selected_charts = st.multiselect("Select charts to display:", chart_options, default=chart_options)
-                            
-                            # Display selected charts
-                            if "Intraday Price" in selected_charts:
-                                st.plotly_chart(fig_intraday, use_container_width=True, key="Dashboard_intraday_chart")
-                            
-                            # Create a list of selected supplemental charts
-                            supplemental_charts = []
-                            if "Gamma Exposure" in selected_charts:
-                                supplemental_charts.append(fig_gamma)
-                            if "Delta Exposure" in selected_charts:
-                                supplemental_charts.append(fig_delta)
-                            if "Vanna Exposure" in selected_charts:
-                                supplemental_charts.append(fig_vanna)
-                            if "Charm Exposure" in selected_charts:
-                                supplemental_charts.append(fig_charm)
-                            if "Speed Exposure" in selected_charts:
-                                supplemental_charts.append(fig_speed)
-                            if "Vomma Exposure" in selected_charts:
-                                supplemental_charts.append(fig_vomma)
-                            if "Volume Ratio" in selected_charts:
-                                supplemental_charts.append(fig_volume_ratio)
-                            
-                            # Display supplemental charts in rows of 2
-                            for i in range(0, len(supplemental_charts), 2):
-                                cols = st.columns(2)
-                                for j, chart in enumerate(supplemental_charts[i:i+2]):
-                                    cols[j].plotly_chart(chart, use_container_width=True)
+                
+                # Calculate volume ratio
+                call_volume = calls['volume'].sum()
+                put_volume = puts['volume'].sum()
+                fig_volume_ratio = create_donut_chart(call_volume, put_volume)
+                
+                # Multi-select for choosing charts to display
+                chart_options = ["Intraday Price", "Gamma Exposure", "Vanna Exposure", "Delta Exposure", "Charm Exposure", "Speed Exposure", "Vomma Exposure", "Volume Ratio"]
+                selected_charts = st.multiselect("Select charts to display:", chart_options, default=chart_options)
+                
+                # Display selected charts
+                if "Intraday Price" in selected_charts:
+                    st.plotly_chart(fig_intraday, use_container_width=True, key="Dashboard_intraday_chart")
+                
+                # Create a list of selected supplemental charts
+                supplemental_charts = []
+                if "Gamma Exposure" in selected_charts:
+                    supplemental_charts.append(fig_gamma)
+                if "Delta Exposure" in selected_charts:
+                    supplemental_charts.append(fig_delta)
+                if "Vanna Exposure" in selected_charts:
+                    supplemental_charts.append(fig_vanna)
+                if "Charm Exposure" in selected_charts:
+                    supplemental_charts.append(fig_charm)
+                if "Speed Exposure" in selected_charts:
+                    supplemental_charts.append(fig_speed)
+                if "Vomma Exposure" in selected_charts:
+                    supplemental_charts.append(fig_vomma)
+                if "Volume Ratio" in selected_charts:
+                    supplemental_charts.append(fig_volume_ratio)
+                
+                # Display supplemental charts in rows of 2
+                for i in range(0, len(supplemental_charts), 2):
+                    cols = st.columns(2)
+                    for j, chart in enumerate(supplemental_charts[i:i+2]):
+                        cols[j].plotly_chart(chart, use_container_width=True)
 
 # -----------------------------------------
 # Auto-refresh
@@ -1165,12 +1011,14 @@ elif st.session_state.current_page == "Dashboard":
 refresh_rate = 10  # in seconds
 if not st.session_state.get("loading_complete", False):
     st.session_state.loading_complete = True
-    safe_rerun()
+    st.rerun()
 else:
     time.sleep(refresh_rate)
-    safe_rerun()
+    st.rerun()
 
-# Remove redundant initialization check
 if not st.session_state.get("initialized", False):
     st.session_state.initialized = True
-    safe_rerun()
+    st.rerun()
+else:
+    time.sleep(refresh_rate)
+    st.rerun()
