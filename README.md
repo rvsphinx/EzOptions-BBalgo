@@ -1,6 +1,6 @@
 # Ez Options
 
-A real-time options analysis tool that provides interactive visualizations of options data, greeks, and market indicators.
+Unlock the power of options trading with Ez Options, a real-time analysis tool that provides interactive visualizations of options data, greeks, and market indicators. Whether you're a seasoned trader or just starting out, Ez Options helps you make informed decisions with its user-friendly interface and comprehensive data analysis.
 
 ![Ez Options Dashboard](https://i.imgur.com/8hT2LZ4.png)
 
