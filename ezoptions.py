@@ -267,36 +267,76 @@ def calculate_greeks(flag, S, K, t, sigma):
         t = max(t, 1/1440)  # Minimum 1 minute expressed in years
         d1 = (log(S / K) + (0.5 * sigma**2) * t) / (sigma * sqrt(t))
         d2 = d1 - sigma * sqrt(t)
-        delta_val = bs_delta(flag, S, K, t, 0, sigma)  # Risk-free rate set to 0
-        gamma_val = bs_gamma(flag, S, K, t, 0, sigma)  # Risk-free rate set to 0
-        vega_val = bs_vega(flag, S, K, t, 0, sigma)  # Risk-free rate set to 0
-        vanna_val = -vega_val * d2 / (S * sigma * sqrt(t))
+        
+        # These are correct from py_vollib
+        delta_val = bs_delta(flag, S, K, t, 0, sigma)
+        gamma_val = bs_gamma(flag, S, K, t, 0, sigma)
+        vega_val = bs_vega(flag, S, K, t, 0, sigma)
+        
+        # Correct vanna calculation
+        vanna_val = -norm.pdf(d1) * d2 / sigma
+        
         return delta_val, gamma_val, vanna_val
     except Exception as e:
         st.error(f"Error calculating greeks: {e}")
         return None, None, None
-    
+
 def calculate_charm(flag, S, K, t, sigma):
     """
     Calculate charm (dDelta/dTime) for an option.
     """
     try:
-        # Add a small offset to prevent division by zero
-        t = max(t, 1/1440)  # Minimum 1 minute expressed in years
+        t = max(t, 1/1440)
         d1 = (log(S / K) + (0.5 * sigma**2) * t) / (sigma * sqrt(t))
         d2 = d1 - sigma * sqrt(t)
         
         norm_d1 = norm.pdf(d1)
-        norm_d2 = norm.pdf(d2)
         
+        # Correct charm formula
         if flag == 'c':
-            charm = -norm_d1 * (sigma / (2 * sqrt(t))) * (1 - d1/(sigma * sqrt(t)))
+            charm = -norm_d1 * (2*(0.5*sigma**2)*t - d2*sigma*sqrt(t)) / (2*t*sigma*sqrt(t))
         else:  # put
-            charm = -norm_d1 * (sigma / (2 * sqrt(t))) * (1 - d1/(sigma * sqrt(t)))
+            charm = -norm_d1 * (2*(0.5*sigma**2)*t - d2*sigma*sqrt(t)) / (2*t*sigma*sqrt(t))
+            charm = -charm  # Negative for puts
         
         return charm
     except Exception as e:
         st.error(f"Error calculating charm: {e}")
+        return None
+
+def calculate_speed(flag, S, K, t, sigma):
+    """
+    Calculate speed (dGamma/dSpot) for an option.
+    """
+    try:
+        t = max(t, 1/1440)
+        d1 = (log(S / K) + (0.5 * sigma**2) * t) / (sigma * sqrt(t))
+        
+        # Correct speed formula
+        gamma = bs_gamma(flag, S, K, t, 0, sigma)
+        speed = -gamma * (d1/(sigma * sqrt(t)) + 1) / S
+        
+        return speed
+    except Exception as e:
+        st.error(f"Error calculating speed: {e}")
+        return None
+
+def calculate_vomma(flag, S, K, t, sigma):
+    """
+    Calculate vomma (dVega/dVol) for an option.
+    """
+    try:
+        t = max(t, 1/1440)
+        d1 = (log(S / K) + (0.5 * sigma**2) * t) / (sigma * sqrt(t))
+        d2 = d1 - sigma * sqrt(t)
+        
+        # Correct vomma formula
+        vega = bs_vega(flag, S, K, t, 0, sigma)
+        vomma = vega * (d1 * d2) / sigma
+        
+        return vomma
+    except Exception as e:
+        st.error(f"Error calculating vomma: {e}")
         return None
 
 # Add error handling for fetching the last price to avoid KeyError.
@@ -320,37 +360,6 @@ def is_valid_trading_day(expiry_date, current_date):
     """Helper function to check if expiry is within valid trading window"""
     days_difference = (expiry_date - current_date).days
     return days_difference >= -1
-
-def calculate_speed(flag, S, K, t, sigma):
-    """
-    Calculate speed (DgammaDspot) for an option.
-    """
-    try:
-        # Add a small offset to prevent division by zero
-        t = max(t, 1/1440)  # Minimum 1 minute expressed in years
-        d1 = (log(S / K) + (0.5 * sigma**2) * t) / (sigma * sqrt(t))
-        gamma_val = bs_gamma(flag, S, K, t, 0, sigma)  # Risk-free rate set to 0
-        speed = -gamma_val * (1 + (d1 / (sigma * sqrt(t)))) / S
-        return speed
-    except Exception as e:
-        st.error(f"Error calculating speed: {e}")
-        return None
-
-def calculate_vomma(flag, S, K, t, sigma):
-    """
-    Calculate vomma (DvegaDvol) for an option.
-    """
-    try:
-        # Add a small offset to prevent division by zero
-        t = max(t, 1/1440)  # Minimum 1 minute expressed in years
-        d1 = (log(S / K) + (0.5 * sigma**2) * t) / (sigma * sqrt(t))
-        d2 = d1 - sigma * sqrt(t)
-        vega_val = bs_vega(flag, S, K, t, 0, sigma)  # Risk-free rate set to 0
-        vomma = vega_val * (d1 * d2 / sigma)
-        return vomma
-    except Exception as e:
-        st.error(f"Error calculating vomma: {e}")
-        return None
 
 #Streamlit UI
 st.title("Ez Options Stock Data")
@@ -539,8 +548,30 @@ def create_exposure_bar_chart(calls, puts, exposure_type, title, S):
     combined_chart = pd.concat([calls_df, puts_df], ignore_index=True)
     combined_chart.sort_values(by='strike', inplace=True)
 
-    # Calculate Net Exposure
-    net_exposure = calls.groupby('strike')[exposure_type].sum() - puts.groupby('strike')[exposure_type].sum()
+    # Calculate Net Exposure based on type - here are the correct calculations:
+    if exposure_type == 'DEX':
+        # For Delta Exposure: Add calls and puts since puts already have negative delta
+        net_exposure = calls.groupby('strike')[exposure_type].sum() + puts.groupby('strike')[exposure_type].sum()
+    
+    elif exposure_type == 'GEX':
+        # For Gamma Exposure: Add calls and subtract puts (gamma is positive for both)
+        net_exposure = calls.groupby('strike')[exposure_type].sum() - puts.groupby('strike')[exposure_type].sum()
+    
+    elif exposure_type == 'VEX':
+        # For Vanna Exposure: Add calls and puts (opposite signs built into calculation)
+        net_exposure = calls.groupby('strike')[exposure_type].sum() + puts.groupby('strike')[exposure_type].sum()
+    
+    elif exposure_type == 'Charm':
+        # For Charm: Add calls and puts (opposite signs built into calculation)
+        net_exposure = calls.groupby('strike')[exposure_type].sum() + puts.groupby('strike')[exposure_type].sum()
+    
+    elif exposure_type == 'Speed':
+        # For Speed: Add calls and puts (opposite signs built into calculation)
+        net_exposure = calls.groupby('strike')[exposure_type].sum() + puts.groupby('strike')[exposure_type].sum()
+    
+    elif exposure_type == 'Vomma':
+        # For Vomma: Add calls and puts (same sign for both)
+        net_exposure = calls.groupby('strike')[exposure_type].sum() + puts.groupby('strike')[exposure_type].sum()
 
     fig = px.bar(
         combined_chart,
