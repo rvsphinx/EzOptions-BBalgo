@@ -738,7 +738,15 @@ if st.session_state.current_page == "OI & Volume":
     with main_container:
         st.empty()  # Clear previous content
         st.write("**Select filters below to see updated data, charts, and tables.**")
-        user_ticker = st.text_input("Enter Stock Ticker (e.g., SPY, TSLA, SPX, NDX):", saved_ticker, key="options_data_ticker")
+        col1, col2 = st.columns([0.94, 0.06])
+        with col1:
+            user_ticker = st.text_input("Enter Stock Ticker (e.g., SPY, TSLA, SPX, NDX):", saved_ticker, key="options_data_ticker")
+        with col2:
+            st.write("")  # Add some spacing
+            st.write("")  # Add some spacing
+            if st.button("🔄", key="refresh_button_oi"):
+                st.cache_data.clear()  # Clear the cache before rerunning
+                st.rerun()
         ticker = format_ticker(user_ticker)
         
         # Clear cache if ticker changes
@@ -803,7 +811,15 @@ elif st.session_state.current_page == "Volume Ratio":
     main_container = st.container()
     with main_container:
         st.empty()  # Clear previous content
-        user_ticker = st.text_input("Enter Stock Ticker (e.g., SPY, TSLA, SPX, NDX):", saved_ticker, key="volume_ratio_ticker")
+        col1, col2 = st.columns([0.94, 0.06])
+        with col1:
+            user_ticker = st.text_input("Enter Stock Ticker (e.g., SPY, TSLA, SPX, NDX):", saved_ticker, key="volume_ratio_ticker")
+        with col2:
+            st.write("")  # Add some spacing
+            st.write("")  # Add some spacing
+            if st.button("🔄", key="refresh_button_volume"):
+                st.cache_data.clear()  # Clear the cache before rerunning
+                st.rerun()
         ticker = format_ticker(user_ticker)
         
         # Clear cache if ticker changes
@@ -843,11 +859,15 @@ elif st.session_state.current_page in ["Gamma Exposure", "Vanna Exposure", "Delt
     with exposure_container:
         st.empty()  # Clear previous content
         page_name = st.session_state.current_page.split()[0].lower()  # gamma, vanna, delta, charm, speed, or vomma
-        user_ticker = st.text_input(
-            "Enter Stock Ticker (e.g., SPY, TSLA, SPX, NDX):", 
-            saved_ticker, 
-            key=f"{page_name}_exposure_ticker"
-        )
+        col1, col2 = st.columns([0.94, 0.06])
+        with col1:
+            user_ticker = st.text_input("Enter Stock Ticker (e.g., SPY, TSLA, SPX, NDX):", saved_ticker, key=f"{page_name}_exposure_ticker")
+        with col2:
+            st.write("")  # Add some spacing
+            st.write("")  # Add some spacing
+            if st.button("🔄", key=f"refresh_button_{page_name}"):
+                st.cache_data.clear()  # Clear the cache before rerunning
+                st.rerun()
         ticker = format_ticker(user_ticker)
         
         # Clear cache if ticker changes
@@ -888,7 +908,15 @@ elif st.session_state.current_page == "Calculated Greeks":
         st.empty()  # Clear previous content
         st.write("This page calculates delta, gamma, and vanna based on market data.")
         
-        user_ticker = st.text_input("Enter Stock Ticker (e.g., SPY, TSLA, SPX, NDX):", saved_ticker, key="calculated_greeks_ticker")
+        col1, col2 = st.columns([0.94, 0.06])
+        with col1:
+            user_ticker = st.text_input("Enter Stock Ticker (e.g., SPY, TSLA, SPX, NDX):", saved_ticker, key="calculated_greeks_ticker")
+        with col2:
+            st.write("")  # Add some spacing
+            st.write("")  # Add some spacing
+            if st.button("🔄", key="refresh_button_greeks"):
+                st.cache_data.clear()  # Clear the cache before rerunning
+                st.rerun()
         ticker = format_ticker(user_ticker)
         
         # Clear cache if ticker changes
@@ -992,7 +1020,15 @@ elif st.session_state.current_page == "Dashboard":
     main_container = st.container()
     with main_container:
         st.empty()
-        user_ticker = st.text_input("Enter Stock Ticker (e.g., SPY, TSLA, SPX, NDX):", saved_ticker, key="dashboard_ticker")
+        col1, col2 = st.columns([0.94, 0.06])
+        with col1:
+            user_ticker = st.text_input("Enter Stock Ticker (e.g., SPY, TSLA, SPX, NDX):", saved_ticker, key="dashboard_ticker")
+        with col2:
+            st.write("")  # Add some spacing
+            st.write("")  # Add some spacing
+            if st.button("🔄", key="refresh_button_dashboard"):
+                st.cache_data.clear()  # Clear the cache before rerunning
+                st.rerun()
         ticker = format_ticker(user_ticker)
         
         # Clear cache if ticker changes
@@ -1135,6 +1171,13 @@ elif st.session_state.current_page == "Dashboard":
                 # Multi-select for choosing charts to display
                 chart_options = ["Intraday Price", "Gamma Exposure", "Vanna Exposure", "Delta Exposure", "Charm Exposure", "Speed Exposure", "Vomma Exposure", "Volume Ratio"]
                 selected_charts = st.multiselect("Select charts to display:", chart_options, default=chart_options)
+                
+                # Add current price display here, before the charts
+                if 'saved_ticker' in st.session_state and st.session_state.saved_ticker:
+                    current_price = get_current_price(st.session_state.saved_ticker)
+                    if current_price:
+                        st.markdown(f"#### Current Price: ${current_price:.2f}")
+                        st.markdown("---")
                 
                 # Display selected charts
                 if "Intraday Price" in selected_charts:
