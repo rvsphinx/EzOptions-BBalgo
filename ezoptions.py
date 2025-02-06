@@ -184,6 +184,14 @@ def create_oi_volume_charts(calls, puts):
         st.error("Could not fetch underlying price.")
         return
 
+    # Calculate strike range around current price
+    min_strike = S - st.session_state.strike_range
+    max_strike = S + st.session_state.strike_range
+    
+    # Filter data based on strike range
+    calls = calls[(calls['strike'] >= min_strike) & (calls['strike'] <= max_strike)]
+    puts = puts[(puts['strike'] >= min_strike) & (puts['strike'] <= max_strike)]
+    
     calls_df = calls[['strike', 'openInterest', 'volume']].copy()
     calls_df['OptionType'] = 'Call'
     
@@ -193,9 +201,12 @@ def create_oi_volume_charts(calls, puts):
     combined = pd.concat([calls_df, puts_df], ignore_index=True)
     combined.sort_values(by='strike', inplace=True)
     
-    # Calculate Net Open Interest and Net Volume
+    # Calculate Net Open Interest and Net Volume using filtered data
     net_oi = calls.groupby('strike')['openInterest'].sum() - puts.groupby('strike')['openInterest'].sum()
     net_volume = calls.groupby('strike')['volume'].sum() - puts.groupby('strike')['volume'].sum()
+    
+    # Add padding for x-axis range
+    padding = st.session_state.strike_range * 0.1
     
     fig_oi = px.bar(
         combined,
@@ -204,16 +215,27 @@ def create_oi_volume_charts(calls, puts):
         color='OptionType',
         title='Open Interest by Strike',
         barmode='group',
-        color_discrete_map={'Call': call_color, 'Put': put_color}  # Use custom colors
+        color_discrete_map={'Call': call_color, 'Put': put_color}
     )
     
     # Add Net OI trace as bar
-    fig_oi.add_trace(go.Bar(x=net_oi.index, y=net_oi.values, name='Net OI', marker=dict(color=[call_color if val >= 0 else put_color for val in net_oi.values])))
+    if st.session_state.show_net:
+        fig_oi.add_trace(go.Bar(
+            x=net_oi.index, 
+            y=net_oi.values, 
+            name='Net OI', 
+            marker=dict(color=[call_color if val >= 0 else put_color for val in net_oi.values])
+        ))
     
     fig_oi.update_layout(
         xaxis_title='Strike Price',
         yaxis_title='Open Interest',
-        hovermode='x unified'
+        hovermode='x unified',
+        xaxis=dict(
+            range=[min_strike - padding, max_strike + padding],
+            tickmode='linear',
+            dtick=math.ceil(st.session_state.strike_range / 10)
+        )
     )
     fig_oi.update_xaxes(rangeslider=dict(visible=True))
     
@@ -224,16 +246,27 @@ def create_oi_volume_charts(calls, puts):
         color='OptionType',
         title='Volume by Strike',
         barmode='group',
-        color_discrete_map={'Call': call_color, 'Put': put_color}  # Use custom colors
+        color_discrete_map={'Call': call_color, 'Put': put_color}
     )
     
     # Add Net Volume trace as bar
-    fig_volume.add_trace(go.Bar(x=net_volume.index, y=net_volume.values, name='Net Volume', marker=dict(color=[call_color if val >= 0 else put_color for val in net_volume.values])))
+    if st.session_state.show_net:
+        fig_volume.add_trace(go.Bar(
+            x=net_volume.index, 
+            y=net_volume.values, 
+            name='Net Volume', 
+            marker=dict(color=[call_color if val >= 0 else put_color for val in net_volume.values])
+        ))
     
     fig_volume.update_layout(
         xaxis_title='Strike Price',
         yaxis_title='Volume',
-        hovermode='x unified'
+        hovermode='x unified',
+        xaxis=dict(
+            range=[min_strike - padding, max_strike + padding],
+            tickmode='linear',
+            dtick=math.ceil(st.session_state.strike_range / 10)
+        )
     )
     fig_volume.update_xaxes(rangeslider=dict(visible=True))
     
@@ -241,6 +274,19 @@ def create_oi_volume_charts(calls, puts):
     S = round(S, 2)
     fig_oi = add_current_price_line(fig_oi, S)
     fig_volume = add_current_price_line(fig_volume, S)
+    
+    # Apply show/hide settings for calls and puts
+    if not st.session_state.show_calls:
+        fig_oi.for_each_trace(lambda trace: trace.update(visible='legendonly') 
+                             if trace.name == 'Call' else None)
+        fig_volume.for_each_trace(lambda trace: trace.update(visible='legendonly') 
+                                if trace.name == 'Call' else None)
+    
+    if not st.session_state.show_puts:
+        fig_oi.for_each_trace(lambda trace: trace.update(visible='legendonly') 
+                             if trace.name == 'Put' else None)
+        fig_volume.for_each_trace(lambda trace: trace.update(visible='legendonly') 
+                                if trace.name == 'Put' else None)
     
     return fig_oi, fig_volume
 
@@ -374,8 +420,20 @@ def reset_session_state():
         'saved_ticker', 
         'saved_expiry_date',
         'call_color',  # Add color settings to preserved keys
-        'put_color'
+        'put_color',
+        'show_calls',  # Preserve visibility settings
+        'show_puts',
+        'show_net',
+        'strike_range'  # Preserve strike range setting
     }
+    
+    # Initialize visibility settings if they don't exist
+    if 'show_calls' not in st.session_state:
+        st.session_state.show_calls = True
+    if 'show_puts' not in st.session_state:
+        st.session_state.show_puts = True
+    if 'show_net' not in st.session_state:
+        st.session_state.show_net = True
     
     preserved_values = {key: st.session_state[key] 
                        for key in preserved_keys 
@@ -430,7 +488,16 @@ with st.sidebar.expander("Chart Settings", expanded=False):
         st.session_state.call_color = '#00FF00'  # Default green for calls
     if 'put_color' not in st.session_state:
         st.session_state.put_color = '#FF0000'  # Default red for puts
+    
+    # Initialize visibility settings if not already set
+    if 'show_calls' not in st.session_state:
+        st.session_state.show_calls = True
+    if 'show_puts' not in st.session_state:
+        st.session_state.show_puts = True
+    if 'show_net' not in st.session_state:
+        st.session_state.show_net = True
 
+    st.write("Colors:")
     # Color pickers
     call_color = st.color_picker("Calls", st.session_state.call_color)
     put_color = st.color_picker("Puts", st.session_state.put_color)
@@ -440,6 +507,33 @@ with st.sidebar.expander("Chart Settings", expanded=False):
         st.session_state.call_color = call_color
     if put_color != st.session_state.put_color:
         st.session_state.put_color = put_color
+
+    st.write("Show/Hide Elements:")
+    # Visibility toggles
+    show_calls = st.checkbox("Show Calls", value=st.session_state.show_calls)
+    show_puts = st.checkbox("Show Puts", value=st.session_state.show_puts)
+    show_net = st.checkbox("Show Net", value=st.session_state.show_net)
+
+    # Update session state when visibility changes
+    st.session_state.show_calls = show_calls
+    st.session_state.show_puts = show_puts
+    st.session_state.show_net = show_net
+
+    st.write("Strike Range:")
+    # Initialize strike range in session state
+    if 'strike_range' not in st.session_state:
+        st.session_state.strike_range = 20.0  # Default range of ±20 strikes
+    
+    # Add strike range control
+    strike_range = st.number_input(
+        "Strike Range (±)",
+        min_value=1.0,
+        max_value=200.0,
+        value=st.session_state.strike_range,
+        step=1.0,
+        key="strike_range_sidebar"
+    )
+    st.session_state.strike_range = strike_range
 
 # Use the saved ticker and expiry date if available
 saved_ticker = st.session_state.get("saved_ticker", "")
@@ -568,69 +662,75 @@ def create_exposure_bar_chart(calls, puts, exposure_type, title, S):
     calls_df['OptionType'] = 'Call'
 
     puts_df = puts[['strike', exposure_type]].copy()
-    puts_df = puts_df[puts[exposure_type] != 0]
+    puts_df = puts_df[puts_df[exposure_type] != 0]
     puts_df['OptionType'] = 'Put'
 
-    combined_chart = pd.concat([calls_df, puts_df], ignore_index=True)
-    combined_chart.sort_values(by='strike', inplace=True)
+    # Calculate strike range around current price
+    min_strike = S - st.session_state.strike_range
+    max_strike = S + st.session_state.strike_range
+    
+    # Apply strike range filter
+    calls_df = calls_df[(calls_df['strike'] >= min_strike) & (calls_df['strike'] <= max_strike)]
+    puts_df = puts_df[(puts_df['strike'] >= min_strike) & (puts_df['strike'] <= max_strike)]
 
-    # Calculate Net Exposure based on type - here are the correct calculations:
+    # Filter the original dataframes for net exposure calculation
+    calls_filtered = calls[(calls['strike'] >= min_strike) & (calls['strike'] <= max_strike)]
+    puts_filtered = puts[(puts['strike'] >= min_strike) & (puts['strike'] <= max_strike)]
+
+    # Calculate Net Exposure based on type using filtered data
     if exposure_type == 'DEX':
-        # For Delta Exposure: Add calls and puts since puts already have negative delta
-        net_exposure = calls.groupby('strike')[exposure_type].sum() + puts.groupby('strike')[exposure_type].sum()
-    
+        net_exposure = calls_filtered.groupby('strike')[exposure_type].sum() + puts_filtered.groupby('strike')[exposure_type].sum()
     elif exposure_type == 'GEX':
-        # For Gamma Exposure: Add calls and subtract puts (gamma is positive for both)
-        net_exposure = calls.groupby('strike')[exposure_type].sum() - puts.groupby('strike')[exposure_type].sum()
-    
-    elif exposure_type == 'VEX':
-        # For Vanna Exposure: Add calls and puts (opposite signs built into calculation)
-        net_exposure = calls.groupby('strike')[exposure_type].sum() + puts.groupby('strike')[exposure_type].sum()
-    
-    elif exposure_type == 'Charm':
-        # For Charm: Add calls and puts (opposite signs built into calculation)
-        net_exposure = calls.groupby('strike')[exposure_type].sum() + puts.groupby('strike')[exposure_type].sum()
-    
-    elif exposure_type == 'Speed':
-        # For Speed: Add calls and puts (opposite signs built into calculation)
-        net_exposure = calls.groupby('strike')[exposure_type].sum() + puts.groupby('strike')[exposure_type].sum()
-    
-    elif exposure_type == 'Vomma':
-        # For Vomma: Add calls and puts (same sign for both)
-        net_exposure = calls.groupby('strike')[exposure_type].sum() + puts.groupby('strike')[exposure_type].sum()
+        net_exposure = calls_filtered.groupby('strike')[exposure_type].sum() - puts_filtered.groupby('strike')[exposure_type].sum()
+    else:
+        net_exposure = calls_filtered.groupby('strike')[exposure_type].sum() + puts_filtered.groupby('strike')[exposure_type].sum()
 
-    fig = px.bar(
-        combined_chart,
-        x='strike',
-        y=exposure_type,
-        color='OptionType',
-        title=title,
-        barmode='group',
-        color_discrete_map={'Call': call_color, 'Put': put_color}  # Use custom colors
-    )
+    fig = go.Figure()
 
-    # Add Net Exposure bar with conditional coloring
-    net_colors = [call_color if val >= 0 else put_color for val in net_exposure.values]
-    fig.add_trace(go.Bar(
-        x=net_exposure.index, 
-        y=net_exposure.values, 
-        name='Net', 
-        marker=dict(color=net_colors)
-    ))
+    # Add calls if enabled
+    if st.session_state.show_calls:
+        fig.add_trace(go.Bar(
+            x=calls_df['strike'],
+            y=calls_df[exposure_type],
+            name='Call',
+            marker_color=call_color
+        ))
 
+    # Add puts if enabled
+    if st.session_state.show_puts:
+        fig.add_trace(go.Bar(
+            x=puts_df['strike'],
+            y=puts_df[exposure_type],
+            name='Put',
+            marker_color=put_color
+        ))
+
+    # Add Net if enabled
+    if st.session_state.show_net and not net_exposure.empty:
+        net_colors = [call_color if val >= 0 else put_color for val in net_exposure.values]
+        fig.add_trace(go.Bar(
+            x=net_exposure.index,
+            y=net_exposure.values,
+            name='Net',
+            marker=dict(color=net_colors)
+        ))
+
+    # Update layout to center around current price
+    padding = st.session_state.strike_range * 0.1  # Add 10% padding
     fig.update_layout(
+        title=title,
         xaxis_title='Strike Price',
         yaxis_title=title,
-        hovermode='x unified'
+        barmode='group',
+        hovermode='x unified',
+        xaxis=dict(
+            range=[min_strike - padding, max_strike + padding],
+            tickmode='linear',
+            dtick=math.ceil(st.session_state.strike_range / 10)  # Dynamic tick spacing
+        )
     )
 
-    # Automatically adjust x-axis range
-    min_strike = combined_chart['strike'].min()
-    max_strike = combined_chart['strike'].max()
-    fig.update_xaxes(range=[min_strike, max_strike])
-
     fig = add_current_price_line(fig, S)
-
     return fig
 
 if st.session_state.current_page == "OI & Volume":
@@ -666,19 +766,10 @@ if st.session_state.current_page == "OI & Volume":
                     if calls.empty and puts.empty:
                         st.warning("No options data found for the selected expiry.")
                     else:
-                        min_strike = float(min(calls['strike'].min(), puts['strike'].min()))
-                        max_strike = float(max(calls['strike'].max(), puts['strike'].max()))
-                        strike_range = st.slider(
-                            "Select Strike Range:",
-                            min_value=min_strike,
-                            max_value=max_strike,
-                            value=(min_strike, max_strike),
-                            step=1.0
-                        )
                         volume_over_oi = st.checkbox("Show only rows where Volume > Open Interest")
-                        min_selected, max_selected = strike_range
-                        calls_filtered = calls[(calls['strike'] >= min_selected) & (calls['strike'] <= max_selected)].copy()
-                        puts_filtered = puts[(puts['strike'] >= min_selected) & (puts['strike'] <= max_selected)].copy()
+                        # Filter data based on volume over OI if checked
+                        calls_filtered = calls.copy()
+                        puts_filtered = puts.copy()
                         if volume_over_oi:
                             calls_filtered = calls_filtered[calls_filtered['volume'] > calls_filtered['openInterest']]
                             puts_filtered = puts_filtered[puts_filtered['volume'] > puts_filtered['openInterest']]
