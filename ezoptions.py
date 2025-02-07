@@ -13,12 +13,71 @@ from py_vollib.black_scholes.greeks.analytical import vega as bs_vega
 import re
 import time
 from scipy.stats import norm
-from ez_api import EzApi
+import requests
+import json
+import base64
+from random import randint
 
-st.set_page_config(layout="wide")
+# Integrated EzApi implementation
+class EzApi:
+    def __init__(self):
+        self._h = {
+            "accept": "application/json",
+            "accept-language": "en-US,en;q=0.9",
+            "content-type": "text/plain;charset=UTF-8",
+            "sec-fetch-dest": "empty",
+            "Referer": self._d("aHR0cHM6Ly93d3cudHJhZGluZ3ZpZXcuY29tLw==")
+        }
+        self._b = self._d("aHR0cHM6Ly9zY2FubmVyLnRyYWRpbmd2aWV3LmNvbS8=")
+    
+    def _d(self, s):
+        return base64.b64decode(s.encode()).decode()
+    
+    def _p(self, e):
+        return f"{self._b}{e}"
+    
+    def get_live_price(self, t):
+        _m = {
+            'SPX': 'CBOE:SPX',
+            'VIX': 'CBOE:VIX',
+            'NDX': 'NASDAQ:NDX'
+        }
+        _f = _m.get(t, f"INDEX:{t}")
+        _u = self._p("global/scan2")
+        
+        _d = {
+            "columns": ["close"],
+            "symbols": {
+                "tickers": [_f],
+                "query": {"types": []}
+            }
+        }
+        
+        try:
+            r = requests.post(_u, headers=self._h, data=json.dumps(_d))
+            d = r.json()
+            return d['symbols'][0]['f'][0] if d.get('symbols') and len(d['symbols']) > 0 else None
+        except:
+            return None
+
+    def fetch_options(self, t, e):
+        _u = self._p("options/scan2")
+        _d = {
+            "columns": ["ask", "bid", "currency", "delta", "expiration", "gamma", 
+                       "iv", "option-type", "pricescale", "rho", "root", "strike", 
+                       "theoPrice", "theta", "vega"],
+            "index_filters": [{"name": "underlying_symbol", "values": [f"{e}:{t}"]}]
+        }
+        try:
+            r = requests.post(_u, headers=self._h, data=json.dumps(_d))
+            return r.json()
+        except:
+            return {}
 
 # Initialize EzApi instance
 ez_api = EzApi()
+
+st.set_page_config(layout="wide")
 
 # Initialize session state for colors if not already set
 if 'call_color' not in st.session_state:
@@ -467,7 +526,6 @@ def fetch_and_process_multiple_dates(ticker, expiry_dates, process_func):
     return pd.DataFrame(), pd.DataFrame()
 
 def get_combined_intraday_data(ticker, stock):
-    """Get combined intraday data with live price updates."""
     formatted_ticker = ticker.replace('%5E', '^')
     intraday_data = stock.history(period="1d", interval="1m")
     if intraday_data.empty:
@@ -665,7 +723,7 @@ def chart_settings():
         st.session_state.strike_range = st.number_input(
             "Strike Range (±)",
             min_value=1.0,
-            max_value=200.0,
+            max_value=2000.0,
             value=st.session_state.strike_range,
             step=1.0,
             key="strike_range_sidebar"
