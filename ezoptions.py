@@ -718,7 +718,6 @@ def chart_settings():
             st.session_state.show_net = show_net
             st.rerun()
 
-        st.write("Strike Range:")
         # Initialize strike range in session state
         if 'strike_range' not in st.session_state:
             st.session_state.strike_range = 20.0
@@ -2005,9 +2004,10 @@ elif st.session_state.current_page == "Dashboard":
                                 font=dict(color='yellow', size=15)
                             )
                             
-                            # Update y-axis range to include current price
-                            y_min = min(intraday_data['Close'].min(), current_price) * 0.9995
-                            y_max = max(intraday_data['Close'].max(), current_price) * 1.0005
+                            # Update y-axis range to include current price and market open price
+                            market_open_price = intraday_data['Open'].iloc[0]
+                            y_min = min(intraday_data['Close'].min(), current_price, market_open_price) * 0.9995
+                            y_max = max(intraday_data['Close'].max(), current_price, market_open_price) * 1.0005
                             fig_intraday.update_yaxes(range=[y_min, y_max])
 
                         # Process options data
@@ -2021,7 +2021,7 @@ elif st.session_state.current_page == "Dashboard":
                         if options_df.empty:
                             st.warning("Intraday Data will display near market open.")
                         else:
-                            top5 = options_df.nlargest(6, 'GEX')[['strike', 'GEX', 'OptionType']]
+                            top5 = options_df.nlargest(7, 'GEX')[['strike', 'GEX', 'OptionType']]
                             
                             # Find max GEX value for color scaling
                             max_gex = abs(top5['GEX']).max()
@@ -2073,8 +2073,8 @@ elif st.session_state.current_page == "Dashboard":
                                             
                                             added_strikes.add(row.strike)
                             
-                            # Adjust y-axis range to fit all top 5 GEX strikes
-                            all_strikes = top5['strike'].tolist() + [current_price]
+                            # Adjust y-axis range to fit all top 5 GEX strikes and market open price
+                            all_strikes = top5['strike'].tolist() + [current_price, market_open_price]
                             y_min = min(all_strikes) * 0.9995
                             y_max = max(all_strikes) * 1.0005
                             fig_intraday.update_yaxes(range=[y_min, y_max])
@@ -2084,7 +2084,9 @@ elif st.session_state.current_page == "Dashboard":
                             title=f"Intraday Price for {ticker}",
                             height=600,
                             hovermode='x unified',
-                            margin=dict(r=150, l=50)
+                            margin=dict(r=150, l=50),
+                            xaxis=dict(autorange=True),
+                            yaxis=dict(autorange=True)
                         )
                         fig_intraday.update_xaxes(title_text="Time")
                         fig_intraday.update_yaxes(title_text="Price", secondary_y=False)
