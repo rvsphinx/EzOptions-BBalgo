@@ -108,6 +108,8 @@ def fetch_options_for_date(ticker, date):
     print(f"Fetching option chain for {ticker} EXP {date}")
     stock = yf.Ticker(ticker)
     try:
+        # Get cached price instead of letting yfinance fetch it again
+        current_price = get_current_price(ticker)
         chain = stock.option_chain(date)
         calls = chain.calls
         puts = chain.puts
@@ -234,7 +236,7 @@ def fetch_all_options(ticker):
     return combined_calls, combined_puts
 
 # Charts and price fetching
-@st.cache_data(ttl=1)  
+@st.cache_data(ttl=10)  
 def get_current_price(ticker):
     print(f"Fetching current price for {ticker}")
     formatted_ticker = ticker.replace('%5E', '^')
@@ -251,7 +253,7 @@ def get_current_price(ticker):
         price = stock.info.get("regularMarketPrice")
         if price is None:
             price = stock.fast_info.get("lastPrice")
-        return float(price) if price is not None else None
+        return round(float(price),2) if price is not None else None
     except Exception as e:
         print(f"Error fetching price from Yahoo Finance: {e}")
         return None
@@ -525,8 +527,11 @@ def fetch_and_process_multiple_dates(ticker, expiry_dates, process_func):
         return combined_calls, combined_puts
     return pd.DataFrame(), pd.DataFrame()
 
-def get_combined_intraday_data(ticker, stock):
+@st.cache_data(ttl=10)
+def get_combined_intraday_data(ticker):
+    """Cache intraday data for 10 seconds to limit API calls"""
     formatted_ticker = ticker.replace('%5E', '^')
+    stock = yf.Ticker(ticker)  # Create stock object inside function
     intraday_data = stock.history(period="1d", interval="1m")
     if intraday_data.empty:
         return None, None
@@ -549,7 +554,6 @@ def get_combined_intraday_data(ticker, stock):
                 
                 # Only update if we have a valid price and it's different
                 if abs(intraday_data['Close'].iloc[-1] - latest_price) > 0.01:
-                    
                     # Update the last row properly using loc
                     last_idx = intraday_data.index[-1]
                     intraday_data.loc[last_idx, 'Close'] = latest_price
@@ -1968,7 +1972,7 @@ elif st.session_state.current_page == "Dashboard":
                     fig_vomma = create_exposure_bar_chart(calls, puts, "Vomma", "Vomma Exposure by Strike", S)
                     
                     # Intraday price chart
-                    intraday_data, current_price = get_combined_intraday_data(ticker, stock)
+                    intraday_data, current_price = get_combined_intraday_data(ticker)
                     if intraday_data is None or current_price is None:
                         st.warning("No intraday data available for this ticker.")
                     else:
