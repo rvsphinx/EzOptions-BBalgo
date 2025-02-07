@@ -2072,7 +2072,13 @@ elif st.session_state.current_page == "Dashboard":
                                             )
                                             
                                             added_strikes.add(row.strike)
-                        
+                            
+                            # Adjust y-axis range to fit all top 5 GEX strikes
+                            all_strikes = top5['strike'].tolist() + [current_price]
+                            y_min = min(all_strikes) * 0.9995
+                            y_max = max(all_strikes) * 1.0005
+                            fig_intraday.update_yaxes(range=[y_min, y_max])
+
                         # Update layout
                         fig_intraday.update_layout(
                             title=f"Intraday Price for {ticker}",
