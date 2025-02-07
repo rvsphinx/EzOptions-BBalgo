@@ -2021,7 +2021,7 @@ elif st.session_state.current_page == "Dashboard":
                         if options_df.empty:
                             st.warning("Intraday Data will display near market open.")
                         else:
-                            top5 = options_df.nlargest(7, 'GEX')[['strike', 'GEX', 'OptionType']]
+                            top5 = options_df.nlargest(6, 'GEX')[['strike', 'GEX', 'OptionType']]
                             
                             # Find max GEX value for color scaling
                             max_gex = abs(top5['GEX']).max()
