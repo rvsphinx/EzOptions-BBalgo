@@ -43,7 +43,7 @@
 
 ## Requirements
 
--   **Python:** 3.8 or higher
+-   **Python:** 3.13.1 or higher required
 
 -   **Dependencies:** Required Python packages are listed in `requirements.txt` and can be installed using `pip install -r requirements.txt`.
 
