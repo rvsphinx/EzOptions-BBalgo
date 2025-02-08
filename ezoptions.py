@@ -99,7 +99,7 @@ def format_ticker(ticker):
         return "^VIX"
     return ticker
 
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=10)  # Use fixed 10 second TTL
 def fetch_options_for_date(ticker, date):
     """
     Fetches option chains for the given ticker and date.
@@ -169,7 +169,7 @@ def add_current_price_line(fig, current_price):
 # -------------------------------
 # Fetch all options experations and add extract expiry
 # -------------------------------
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=10)  # Use fixed 10 second TTL
 def fetch_all_options(ticker):
     """
     Fetches option chains for all available expirations for the given ticker.
@@ -236,7 +236,7 @@ def fetch_all_options(ticker):
     return combined_calls, combined_puts
 
 # Charts and price fetching
-@st.cache_data(ttl=10)  
+@st.cache_data(ttl=10)  # Use fixed 10 second TTL
 def get_current_price(ticker):
     print(f"Fetching current price for {ticker}")
     formatted_ticker = ticker.replace('%5E', '^')
@@ -527,7 +527,7 @@ def fetch_and_process_multiple_dates(ticker, expiry_dates, process_func):
         return combined_calls, combined_puts
     return pd.DataFrame(), pd.DataFrame()
 
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=10)  # Use fixed 10 second TTL
 def get_combined_intraday_data(ticker):
     """Cache intraday data for 10 seconds to limit API calls"""
     formatted_ticker = ticker.replace('%5E', '^')
@@ -589,7 +589,8 @@ def reset_session_state():
         'show_puts',
         'show_net',
         'strike_range',
-        'chart_type'
+        'chart_type',
+        'refresh_rate'  # Add refresh rate to preserved keys
     }
     
     # Initialize visibility settings if they don't exist
@@ -632,6 +633,44 @@ def reset_session_state():
         if key in st.session_state:
             del st.session_state[key]
 
+# Add near the top with other session state initializations
+if 'selected_expiries' not in st.session_state:
+    st.session_state.selected_expiries = {}
+
+@st.fragment
+def expiry_selector_fragment(page_name, available_dates):
+    """Fragment for expiry date selection that properly resets"""
+    container = st.empty()
+    
+    # Initialize session state for this page's selections
+    state_key = f"{page_name}_selected_dates"
+    widget_key = f"{page_name}_expiry_selector"
+    
+    # Initialize previous selection state if not exists
+    if f"{widget_key}_prev" not in st.session_state:
+        st.session_state[f"{widget_key}_prev"] = []
+    
+    if state_key not in st.session_state:
+        st.session_state[state_key] = []
+    
+    with container:
+        selected = st.multiselect(
+            "Select Expiration Date(s) (max 14):",
+            options=available_dates,
+            default=st.session_state[state_key],
+            max_selections=14,
+            key=widget_key
+        )
+        
+        # Check if selection changed
+        if selected != st.session_state[f"{widget_key}_prev"]:
+            st.session_state[state_key] = selected
+            st.session_state[f"{widget_key}_prev"] = selected.copy()
+            if selected:  # Only rerun if there are selections
+                st.rerun()
+    
+    return selected, container
+
 def handle_page_change(new_page):
     """Handle page navigation and state management"""
     if 'current_page' not in st.session_state:
@@ -639,8 +678,17 @@ def handle_page_change(new_page):
         return True
     
     if st.session_state.current_page != new_page:
+        # Clear page-specific state
+        old_state_key = f"{st.session_state.current_page}_selected_dates"
+        if old_state_key in st.session_state:
+            del st.session_state[old_state_key]
+            
+        if 'expiry_selector_container' in st.session_state:
+            st.session_state.expiry_selector_container.empty()
+        
         st.session_state.current_page = new_page
         reset_session_state()
+        st.rerun()
         return True
     
     return False
@@ -648,10 +696,6 @@ def handle_page_change(new_page):
 # Save selected ticker
 def save_ticker(ticker):
     st.session_state.saved_ticker = ticker
-
-# Save experation
-def save_expiry_date(expiry_date):
-    st.session_state.saved_expiry_date = expiry_date
 
 st.sidebar.title("Navigation")
 pages = ["Dashboard", "Volume Ratio", "OI & Volume", "Gamma Exposure", "Delta Exposure", 
@@ -744,6 +788,25 @@ def chart_settings():
         # Update session state when chart type changes
         if chart_type != st.session_state.chart_type:
             st.session_state.chart_type = chart_type
+            st.rerun()
+
+        # Add refresh rate control before chart type
+        if 'refresh_rate' not in st.session_state:
+            st.session_state.refresh_rate = 10  # Default refresh rate
+        
+        new_refresh_rate = st.number_input(
+            "Auto-Refresh Rate (seconds)",
+            min_value=10,
+            max_value=300,
+            value=int(st.session_state.refresh_rate),
+            step=1,
+            help="How often to auto-refresh the page (minimum 10 seconds)"
+        )
+        
+        if new_refresh_rate != st.session_state.refresh_rate:
+            print(f"Changing refresh rate from {st.session_state.refresh_rate} to {new_refresh_rate} seconds")
+            st.session_state.refresh_rate = float(new_refresh_rate)
+            st.cache_data.clear()
             st.rerun()
 
 # Call the regular function instead of the fragment
@@ -893,6 +956,8 @@ def create_exposure_bar_chart(calls, puts, exposure_type, title, S):
     min_strike = S - st.session_state.strike_range
     max_strike = S + st.session_state.strike_range
     
+    # Apply strike range filter
+    calls_df = calls_df[(calls_df['strike'] >= min_strike) & (calls_df['strike'] <= max_strike)]
     # Apply strike range filter
     calls_df = calls_df[(calls_df['strike'] >= min_strike) & (calls_df['strike'] <= max_strike)]
     puts_df = puts_df[(puts_df['strike'] >= min_strike) & (puts_df['strike'] <= max_strike)]
@@ -1246,6 +1311,21 @@ def create_max_pain_chart(calls, puts, S):
     
     return fig
 
+def get_nearest_expiry(available_dates):
+    """Get the nearest expiration date from the list of available dates."""
+    if not available_dates:
+        return None
+    
+    today = datetime.now().date()
+    future_dates = [datetime.strptime(date, '%Y-%m-%d').date() 
+                   for date in available_dates 
+                   if datetime.strptime(date, '%Y-%m-%d').date() >= today]
+    
+    if not future_dates:
+        return None
+    
+    return min(future_dates).strftime('%Y-%m-%d')
+
 if st.session_state.current_page == "OI & Volume":
     main_container = st.container()
     with main_container:
@@ -1273,20 +1353,12 @@ if st.session_state.current_page == "OI & Volume":
             if not available_dates:
                 st.warning("No options data available for this ticker.")
             else:
-                selected_expiry_dates = st.multiselect(
-                    "Select Expiration Date(s) (max 14):",
-                    options=available_dates,
-                    default=[],
-                    max_selections=14,
-                    key="oi_volume_expiry_multi"
-                )
+                selected_expiry_dates, selector_container = expiry_selector_fragment(st.session_state.current_page, available_dates)
+                st.session_state.expiry_selector_container = selector_container
                 
                 if not selected_expiry_dates:
                     st.warning("Please select at least one expiration date.")
                     st.stop()
-                
-                # Save the first selected date as the default
-                save_expiry_date(selected_expiry_dates[0])
                 
                 all_calls, all_puts = fetch_and_process_multiple_dates(
                     ticker,
@@ -1357,20 +1429,12 @@ elif st.session_state.current_page == "Volume Ratio":
             if not available_dates:
                 st.warning("No options data available for this ticker.")
             else:
-                selected_expiry_dates = st.multiselect(
-                    "Select Expiration Date(s) (max 14):",
-                    options=available_dates,
-                    default=[],
-                    max_selections=14,
-                    key="volume_ratio_expiry_multi"
-                )
+                selected_expiry_dates, selector_container = expiry_selector_fragment(st.session_state.current_page, available_dates)
+                st.session_state.expiry_selector_container = selector_container
                 
                 if not selected_expiry_dates:
                     st.warning("Please select at least one expiration date.")
                     st.stop()
-                
-                # Save the first selected date as the default
-                save_expiry_date(selected_expiry_dates[0])
                 
                 all_calls, all_puts = fetch_and_process_multiple_dates(
                     ticker,
@@ -1416,20 +1480,12 @@ elif st.session_state.current_page == "Gamma Exposure":
             if not available_dates:
                 st.warning("No options data available for this ticker.")
             else:
-                selected_expiry_dates = st.multiselect(
-                    "Select Expiration Date(s) (max 14):",
-                    options=available_dates,
-                    default=[],
-                    max_selections=14,
-                    key=f"{page_name}_expiry_multi"
-                )
+                selected_expiry_dates, selector_container = expiry_selector_fragment(st.session_state.current_page, available_dates)
+                st.session_state.expiry_selector_container = selector_container
                 
                 if not selected_expiry_dates:
                     st.warning("Please select at least one expiration date.")
                     st.stop()
-                
-                # Save the first selected date as the default
-                save_expiry_date(selected_expiry_dates[0])
                 
                 all_calls, all_puts = fetch_and_process_multiple_dates(
                     ticker, 
@@ -1485,20 +1541,12 @@ elif st.session_state.current_page == "Vanna Exposure":
             if not available_dates:
                 st.warning("No options data available for this ticker.")
             else:
-                selected_expiry_dates = st.multiselect(
-                    "Select Expiration Date(s) (max 14):",
-                    options=available_dates,
-                    default=[],
-                    max_selections=14,
-                    key=f"{page_name}_expiry_multi"
-                )
+                selected_expiry_dates, selector_container = expiry_selector_fragment(st.session_state.current_page, available_dates)
+                st.session_state.expiry_selector_container = selector_container
                 
                 if not selected_expiry_dates:
                     st.warning("Please select at least one expiration date.")
                     st.stop()
-                
-                # Save the first selected date as the default
-                save_expiry_date(selected_expiry_dates[0])
                 
                 all_calls, all_puts = fetch_and_process_multiple_dates(
                     ticker, 
@@ -1554,20 +1602,12 @@ elif st.session_state.current_page == "Delta Exposure":
             if not available_dates:
                 st.warning("No options data available for this ticker.")
             else:
-                selected_expiry_dates = st.multiselect(
-                    "Select Expiration Date(s) (max 14):",
-                    options=available_dates,
-                    default=[],
-                    max_selections=14,
-                    key=f"{page_name}_expiry_multi"
-                )
+                selected_expiry_dates, selector_container = expiry_selector_fragment(st.session_state.current_page, available_dates)
+                st.session_state.expiry_selector_container = selector_container
                 
                 if not selected_expiry_dates:
                     st.warning("Please select at least one expiration date.")
                     st.stop()
-                
-                # Save the first selected date as the default
-                save_expiry_date(selected_expiry_dates[0])
                 
                 all_calls, all_puts = fetch_and_process_multiple_dates(
                     ticker, 
@@ -1623,20 +1663,12 @@ elif st.session_state.current_page == "Charm Exposure":
             if not available_dates:
                 st.warning("No options data available for this ticker.")
             else:
-                selected_expiry_dates = st.multiselect(
-                    "Select Expiration Date(s) (max 14):",
-                    options=available_dates,
-                    default=[],
-                    max_selections=14,
-                    key=f"{page_name}_expiry_multi"
-                )
+                selected_expiry_dates, selector_container = expiry_selector_fragment(st.session_state.current_page, available_dates)
+                st.session_state.expiry_selector_container = selector_container
                 
                 if not selected_expiry_dates:
                     st.warning("Please select at least one expiration date.")
                     st.stop()
-                
-                # Save the first selected date as the default
-                save_expiry_date(selected_expiry_dates[0])
                 
                 all_calls, all_puts = fetch_and_process_multiple_dates(
                     ticker, 
@@ -1692,20 +1724,12 @@ elif st.session_state.current_page == "Speed Exposure":
             if not available_dates:
                 st.warning("No options data available for this ticker.")
             else:
-                selected_expiry_dates = st.multiselect(
-                    "Select Expiration Date(s) (max 14):",
-                    options=available_dates,
-                    default=[],
-                    max_selections=14,
-                    key=f"{page_name}_expiry_multi"
-                )
+                selected_expiry_dates, selector_container = expiry_selector_fragment(st.session_state.current_page, available_dates)
+                st.session_state.expiry_selector_container = selector_container
                 
                 if not selected_expiry_dates:
                     st.warning("Please select at least one expiration date.")
                     st.stop()
-                
-                # Save the first selected date as the default
-                save_expiry_date(selected_expiry_dates[0])
                 
                 all_calls, all_puts = fetch_and_process_multiple_dates(
                     ticker, 
@@ -1761,20 +1785,12 @@ elif st.session_state.current_page == "Vomma Exposure":
             if not available_dates:
                 st.warning("No options data available for this ticker.")
             else:
-                selected_expiry_dates = st.multiselect(
-                    "Select Expiration Date(s) (max 14):",
-                    options=available_dates,
-                    default=[],
-                    max_selections=14,
-                    key=f"{page_name}_expiry_multi"
-                )
+                selected_expiry_dates, selector_container = expiry_selector_fragment(st.session_state.current_page, available_dates)
+                st.session_state.expiry_selector_container = selector_container
                 
                 if not selected_expiry_dates:
                     st.warning("Please select at least one expiration date.")
                     st.stop()
-                
-                # Save the first selected date as the default
-                save_expiry_date(selected_expiry_dates[0])
                 
                 all_calls, all_puts = fetch_and_process_multiple_dates(
                     ticker, 
@@ -1826,15 +1842,16 @@ elif st.session_state.current_page == "Calculated Greeks":
             if not available_dates:
                 st.warning("No options data available for this ticker.")
             else:
+                # Get nearest expiry and use it as default
+                nearest_expiry = get_nearest_expiry(available_dates)
                 expiry_date_str = st.selectbox(
                     "Select an Exp. Date:", 
                     options=available_dates, 
-                    index=None, 
+                    index=available_dates.index(nearest_expiry) if nearest_expiry else None, 
                     key="calculated_greeks_expiry_main"
                 )
                 
                 if expiry_date_str:  # Only proceed if an expiry date is selected
-                    save_expiry_date(expiry_date_str)  # Save the expiry date
                     
                     selected_expiry = datetime.strptime(expiry_date_str, "%Y-%m-%d").date()
                     calls, puts = fetch_options_for_date(ticker, expiry_date_str)
@@ -1949,15 +1966,16 @@ elif st.session_state.current_page == "Dashboard":
             if not available_dates:
                 st.warning("No options data available for this ticker.")
             else:
+                # Get nearest expiry and use it as default
+                nearest_expiry = get_nearest_expiry(available_dates)
                 expiry_date_str = st.selectbox(
                     "Select an Exp. Date:", 
                     options=available_dates,
-                    index=None,
+                    index=available_dates.index(nearest_expiry) if nearest_expiry else None,
                     key="dashboard_expiry_main"
                 )
                 
                 if expiry_date_str:  # Only proceed if expiry date is selected
-                    save_expiry_date(expiry_date_str)
                     calls, puts, S, t, selected_expiry, today = compute_greeks_and_charts(ticker, expiry_date_str, "dashboard")
                     if calls is None or puts is None:
                         st.stop()
@@ -2021,7 +2039,7 @@ elif st.session_state.current_page == "Dashboard":
                         if options_df.empty:
                             st.warning("Intraday Data will display near market open.")
                         else:
-                            top5 = options_df.nlargest(7, 'GEX')[['strike', 'GEX', 'OptionType']]
+                            top5 = options_df.nlargest(5, 'GEX')[['strike', 'GEX', 'OptionType']]
                             
                             # Find max GEX value for color scaling
                             max_gex = abs(top5['GEX']).max()
@@ -2190,20 +2208,12 @@ elif st.session_state.current_page == "Max Pain":
             if not available_dates:
                 st.warning("No options data available for this ticker.")
             else:
-                selected_expiry_dates = st.multiselect(
-                    "Select Expiration Date(s) (max 14):",
-                    options=available_dates,
-                    default=[],
-                    max_selections=14,
-                    key="max_pain_expiry_multi"
-                )
+                selected_expiry_dates, selector_container = expiry_selector_fragment(st.session_state.current_page, available_dates)
+                st.session_state.expiry_selector_container = selector_container
                 
                 if not selected_expiry_dates:
                     st.warning("Please select at least one expiration date.")
                     st.stop()
-                
-                # Save the first selected date as the default
-                save_expiry_date(selected_expiry_dates[0])
                 
                 all_calls, all_puts = fetch_and_process_multiple_dates(
                     ticker,
@@ -2240,7 +2250,7 @@ elif st.session_state.current_page == "Max Pain":
 # -----------------------------------------
 # Auto-refresh
 # -----------------------------------------
-refresh_rate = 10  # in seconds
+refresh_rate = float(st.session_state.get('refresh_rate', 10))  # Convert to float
 if not st.session_state.get("loading_complete", False):
     st.session_state.loading_complete = True
     st.rerun()
