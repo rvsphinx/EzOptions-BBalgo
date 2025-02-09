@@ -311,17 +311,36 @@ def create_oi_volume_charts(calls, puts):
             marker=dict(color=[call_color if val >= 0 else put_color for val in net_oi.values])
         ))
     
+    # Update OI chart layout with text size settings
     fig_oi.update_layout(
-        xaxis_title='Strike Price',
-        yaxis_title='Open Interest',
+        title=dict(
+            text='Open Interest by Strike',
+            x=0,
+            xanchor='left',
+            font=dict(size=st.session_state.chart_text_size + 8)
+        ),
+        xaxis_title=dict(
+            text='Strike Price',
+            font=dict(size=st.session_state.chart_text_size)
+        ),
+        yaxis_title=dict(
+            text='Open Interest',
+            font=dict(size=st.session_state.chart_text_size)
+        ),
+        legend=dict(
+            font=dict(size=st.session_state.chart_text_size)
+        ),
         hovermode='x unified',
         xaxis=dict(
             range=[min_strike - padding, max_strike + padding],
             tickmode='linear',
-            dtick=math.ceil(st.session_state.strike_range / 10)
+            dtick=math.ceil(st.session_state.strike_range / 10),
+            tickfont=dict(size=st.session_state.chart_text_size)
+        ),
+        yaxis=dict(
+            tickfont=dict(size=st.session_state.chart_text_size)
         )
     )
-    fig_oi.update_xaxes(rangeslider=dict(visible=True))
     
     fig_volume = px.bar(
         combined,
@@ -342,16 +361,38 @@ def create_oi_volume_charts(calls, puts):
             marker=dict(color=[call_color if val >= 0 else put_color for val in net_volume.values])
         ))
     
+    # Update Volume chart layout with text size settings
     fig_volume.update_layout(
-        xaxis_title='Strike Price',
-        yaxis_title='Volume',
+        title=dict(
+            text='Volume by Strike',
+            x=0,
+            xanchor='left',
+            font=dict(size=st.session_state.chart_text_size + 8)
+        ),
+        xaxis_title=dict(
+            text='Strike Price',
+            font=dict(size=st.session_state.chart_text_size)
+        ),
+        yaxis_title=dict(
+            text='Volume',
+            font=dict(size=st.session_state.chart_text_size)
+        ),
+        legend=dict(
+            font=dict(size=st.session_state.chart_text_size)
+        ),
         hovermode='x unified',
         xaxis=dict(
             range=[min_strike - padding, max_strike + padding],
             tickmode='linear',
-            dtick=math.ceil(st.session_state.strike_range / 10)
+            dtick=math.ceil(st.session_state.strike_range / 10),
+            tickfont=dict(size=st.session_state.chart_text_size)
+        ),
+        yaxis=dict(
+            tickfont=dict(size=st.session_state.chart_text_size)
         )
     )
+    
+    fig_oi.update_xaxes(rangeslider=dict(visible=True))
     fig_volume.update_xaxes(rangeslider=dict(visible=True))
     
     # Add current price line
@@ -384,9 +425,17 @@ def create_donut_chart(call_volume, put_volume):
     fig = go.Figure(data=[go.Pie(labels=labels, values=values, hole=0.3)])
     fig.update_layout(
         title_text='Call vs Put Volume Ratio',
-        showlegend=True
+        title_font_size=st.session_state.chart_text_size + 8,  # Title slightly larger
+        showlegend=True,
+        legend=dict(
+            font=dict(size=st.session_state.chart_text_size)
+        )
     )
-    fig.update_traces(hoverinfo='label+percent+value', marker=dict(colors=[call_color, put_color]))
+    fig.update_traces(
+        hoverinfo='label+percent+value',
+        marker=dict(colors=[call_color, put_color]),
+        textfont=dict(size=st.session_state.chart_text_size)
+    )
     return fig
 
 # Greek Calculations
@@ -734,6 +783,24 @@ def chart_settings():
         st.write("Colors:")
         new_call_color = st.color_picker("Calls", st.session_state.call_color)
         new_put_color = st.color_picker("Puts", st.session_state.put_color)
+        
+        # Add text size control
+        if 'chart_text_size' not in st.session_state:
+            st.session_state.chart_text_size = 12  # Default text size
+            
+        new_text_size = st.number_input(
+            "Chart Text Size",
+            min_value=10,
+            max_value=30,
+            value=st.session_state.chart_text_size,
+            step=1,
+            help="Adjust the size of text in charts (titles, labels, etc.)"
+        )
+        
+        # Update session state and trigger rerun if text size changes
+        if new_text_size != st.session_state.chart_text_size:
+            st.session_state.chart_text_size = new_text_size
+            st.rerun()
         
         # Update session state and trigger rerun if either color changes
         if new_call_color != st.session_state.call_color or new_put_color != st.session_state.put_color:
@@ -1133,16 +1200,29 @@ def create_exposure_bar_chart(calls, puts, exposure_type, title, S):
             xref="paper",
             x=0,
             xanchor='left',
-            font=dict(size=20)
+            font=dict(size=st.session_state.chart_text_size + 8)  # Title slightly larger
         ),
-        xaxis_title='Strike Price',
-        yaxis_title=title,
+        xaxis_title=dict(
+            text='Strike Price',
+            font=dict(size=st.session_state.chart_text_size)
+        ),
+        yaxis_title=dict(
+            text=title,
+            font=dict(size=st.session_state.chart_text_size)
+        ),
+        legend=dict(
+            font=dict(size=st.session_state.chart_text_size)
+        ),
         barmode='group',
         hovermode='x unified',
         xaxis=dict(
             range=[min_strike - padding, max_strike + padding],
             tickmode='linear',
-            dtick=math.ceil(st.session_state.strike_range / 10)
+            dtick=math.ceil(st.session_state.strike_range / 10),
+            tickfont=dict(size=st.session_state.chart_text_size)
+        ),
+        yaxis=dict(
+            tickfont=dict(size=st.session_state.chart_text_size)
         )
     )
 
@@ -1295,14 +1375,30 @@ def create_max_pain_chart(calls, puts, S):
     )
 
     fig.update_layout(
-        title='Max Pain',
-        xaxis_title='Strike Price',
-        yaxis_title='Total Pain',
+        title=dict(
+            text='Max Pain',
+            font=dict(size=st.session_state.chart_text_size + 8)  # Title slightly larger
+        ),
+        xaxis_title=dict(
+            text='Strike Price',
+            font=dict(size=st.session_state.chart_text_size)
+        ),
+        yaxis_title=dict(
+            text='Total Pain',
+            font=dict(size=st.session_state.chart_text_size)
+        ),
+        legend=dict(
+            font=dict(size=st.session_state.chart_text_size)
+        ),
         hovermode='x unified',
         xaxis=dict(
             range=[min_strike - padding, max_strike + padding],
             tickmode='linear',
-            dtick=math.ceil(st.session_state.strike_range / 10)
+            dtick=math.ceil(st.session_state.strike_range / 10),
+            tickfont=dict(size=st.session_state.chart_text_size)
+        ),
+        yaxis=dict(
+            tickfont=dict(size=st.session_state.chart_text_size)
         )
     )
     
