@@ -18,64 +18,38 @@ import json
 import base64
 from random import randint
 
-# Integrated EzApi implementation
-class EzApi:
-    def __init__(self):
-        self._h = {
-            "accept": "application/json",
-            "accept-language": "en-US,en;q=0.9",
-            "content-type": "text/plain;charset=UTF-8",
-            "sec-fetch-dest": "empty",
-            "Referer": self._d("aHR0cHM6Ly93d3cudHJhZGluZ3ZpZXcuY29tLw==")
-        }
-        self._b = self._d("aHR0cHM6Ly9zY2FubmVyLnRyYWRpbmd2aWV3LmNvbS8=")
-    
-    def _d(self, s):
-        return base64.b64decode(s.encode()).decode()
-    
-    def _p(self, e):
-        return f"{self._b}{e}"
-    
-    def get_live_price(self, t):
-        _m = {
-            'SPX': 'CBOE:SPX',
-            'VIX': 'CBOE:VIX',
-            'NDX': 'NASDAQ:NDX'
-        }
-        _f = _m.get(t, f"INDEX:{t}")
-        _u = self._p("global/scan2")
+def get_live_price(t):
+    try:
+        d = datetime.now().strftime("%Y-%m-%d")
+        # Hash the base URL
+        base = base64.b64decode("aHR0cHM6Ly9hcGkuMGR0ZXNweC5jb20=").decode()
+        u = f"{base}/aggregateData?series={t}&date={d}&interval=5"
         
-        _d = {
-            "columns": ["close"],
-            "symbols": {
-                "tickers": [_f],
-                "query": {"types": []}
-            }
+        # Hash the headers
+        h = {
+            base64.b64decode("YWNjZXB0").decode(): "*/*",
+            base64.b64decode("YWNjZXB0LWxhbmd1YWdl").decode(): "en-US,en;q=0.9", 
+            base64.b64decode("Y2FjaGUtY29udHJvbA==").decode(): "no-cache",
+            base64.b64decode("cHJhZ21h").decode(): "no-cache",
+            base64.b64decode("cHJpb3JpdHk=").decode(): "u=1, i",
+            base64.b64decode("c2VjLWNoLXVh").decode(): "\"Not(A:Brand\";v=\"99\", \"Google Chrome\";v=\"133\", \"Chromium\";v=\"133\"",
+            base64.b64decode("c2VjLWNoLXVhLW1vYmlsZQ==").decode(): "?0",
+            base64.b64decode("c2VjLWNoLXVhLXBsYXRmb3Jt").decode(): "\"Windows\"",
+            base64.b64decode("c2VjLWZldGNoLWRlc3Q=").decode(): "empty",
+            base64.b64decode("c2VjLWZldGNoLW1vZGU=").decode(): "cors",
+            base64.b64decode("c2VjLWZldGNoLXNpdGU=").decode(): "same-site",
+            base64.b64decode("UmVmZXJlcg==").decode(): base64.b64decode("aHR0cHM6Ly8wZHRlc3B4LmNvbS8=").decode(),
+            base64.b64decode("UmVmZXJlci1Qb2xpY3k=").decode(): "strict-origin-when-cross-origin"
         }
         
-        try:
-            r = requests.post(_u, headers=self._h, data=json.dumps(_d))
-            d = r.json()
-            return d['symbols'][0]['f'][0] if d.get('symbols') and len(d['symbols']) > 0 else None
-        except:
-            return None
-
-    def fetch_options(self, t, e):
-        _u = self._p("options/scan2")
-        _d = {
-            "columns": ["ask", "bid", "currency", "delta", "expiration", "gamma", 
-                       "iv", "option-type", "pricescale", "rho", "root", "strike", 
-                       "theoPrice", "theta", "vega"],
-            "index_filters": [{"name": "underlying_symbol", "values": [f"{e}:{t}"]}]
-        }
-        try:
-            r = requests.post(_u, headers=self._h, data=json.dumps(_d))
-            return r.json()
-        except:
-            return {}
-
-# Initialize EzApi instance
-ez_api = EzApi()
+        r = requests.get(u, headers=h, timeout=5)
+        d = r.json()
+        if d and isinstance(d, list):
+            l = d[-1]
+            if t.lower() in l:
+                return l[t.lower()]
+    except Exception:
+        return None
 
 st.set_page_config(layout="wide")
 
@@ -205,7 +179,6 @@ def fetch_all_options(ticker):
                 st.error(f"Error fetching chain for expiry {exp}: {e}")
                 continue
     else:
-        # Fallback for tickers like SPX which return an empty options list
         try:
             # Get next valid expiration
             next_exp = stock.options[0] if stock.options else None
@@ -238,25 +211,30 @@ def fetch_all_options(ticker):
 # Charts and price fetching
 @st.cache_data(ttl=10)  # Use fixed 10 second TTL
 def get_current_price(ticker):
+    """Get current price with fallback logic"""
     print(f"Fetching current price for {ticker}")
     formatted_ticker = ticker.replace('%5E', '^')
     
-    if formatted_ticker in ['^SPX', '^VIX', '^NDX'] or ticker in ['%5ESPX', '%5ENDX']:
-        symbol = formatted_ticker.replace('^', '')
-        live_price = ez_api.get_live_price(symbol)
-        if live_price is not None:
-            price = round(float(live_price), 2)
-            return price
+    # Try EzApi first for SPX
+    if formatted_ticker in ['^SPX'] or ticker in ['%5ESPX', 'SPX']:
+        try:
+            live_price = get_live_price('spx')
+            if live_price is not None:
+                return round(float(live_price), 2)
+        except Exception as e:
+            print(f"EzApi failed for SPX: {str(e)}")
     
     try:
         stock = yf.Ticker(ticker)
         price = stock.info.get("regularMarketPrice")
         if price is None:
             price = stock.fast_info.get("lastPrice")
-        return round(float(price),2) if price is not None else None
+        if price is not None:
+            return round(float(price), 2)
     except Exception as e:
-        print(f"Error fetching price from Yahoo Finance: {e}")
-        return None
+        print(f"Yahoo Finance error: {str(e)}")
+    
+    return None
 
 def create_oi_volume_charts(calls, puts):
     # Get underlying price
@@ -578,46 +556,31 @@ def fetch_and_process_multiple_dates(ticker, expiry_dates, process_func):
 
 @st.cache_data(ttl=10)  # Use fixed 10 second TTL
 def get_combined_intraday_data(ticker):
-    """Cache intraday data for 10 seconds to limit API calls"""
+    """Get intraday data with fallback logic"""
     formatted_ticker = ticker.replace('%5E', '^')
-    stock = yf.Ticker(ticker)  # Create stock object inside function
+    stock = yf.Ticker(ticker)
     intraday_data = stock.history(period="1d", interval="1m")
     if intraday_data.empty:
         return None, None
     
-    # Make a copy of the DataFrame to avoid SettingWithCopyWarning
     intraday_data = intraday_data.copy()
-    
-    # Get the last Yahoo price as fallback
     yahoo_last_price = intraday_data['Close'].iloc[-1] if not intraday_data.empty else None
     latest_price = yahoo_last_price
     
-    # Special handling for indices
-    if formatted_ticker in ['^SPX', '^VIX', '^NDX']:
+    # Try EzApi first for SPX
+    if formatted_ticker in ['^SPX'] or ticker in ['%5ESPX', 'SPX']:
         try:
-            symbol = formatted_ticker.replace('^', '')
-            ez_price = ez_api.get_live_price(symbol)
-            
-            if ez_price is not None:
-                latest_price = round(float(ez_price), 2)  # Round to 2 decimal places
-                
-                # Only update if we have a valid price and it's different
-                if abs(intraday_data['Close'].iloc[-1] - latest_price) > 0.01:
-                    # Update the last row properly using loc
-                    last_idx = intraday_data.index[-1]
-                    intraday_data.loc[last_idx, 'Close'] = latest_price
-                    intraday_data.loc[last_idx, 'Open'] = latest_price
-                    intraday_data.loc[last_idx, 'High'] = latest_price
-                    intraday_data.loc[last_idx, 'Low'] = latest_price
-                    
+            live_price = get_live_price('spx')
+            if live_price is not None:
+                latest_price = round(float(live_price), 2)
+                last_idx = intraday_data.index[-1]
+                intraday_data.loc[last_idx, 'Close'] = latest_price
+                intraday_data.loc[last_idx, 'Open'] = latest_price
+                intraday_data.loc[last_idx, 'High'] = max(latest_price, intraday_data.loc[last_idx, 'High'])
+                intraday_data.loc[last_idx, 'Low'] = min(latest_price, intraday_data.loc[last_idx, 'Low'])
         except Exception as e:
+            print(f"EzApi failed for intraday data: {str(e)}")
             latest_price = yahoo_last_price
-    else:
-        latest_price = yahoo_last_price
-    
-    # Ensure we have a valid price
-    if latest_price is None:
-        latest_price = yahoo_last_price
     
     return intraday_data, latest_price
 
