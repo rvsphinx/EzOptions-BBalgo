@@ -913,6 +913,21 @@ def chart_settings():
             st.cache_data.clear()
             st.rerun()
 
+        # Add GEX Type selector after chart type
+        if 'gex_type' not in st.session_state:
+            st.session_state.gex_type = 'Net'  # Default to Net GEX
+        
+        gex_type = st.selectbox(
+            "Gamma Exposure Type:",
+            options=['Net', 'Absolute'],
+            index=['Net', 'Absolute'].index(st.session_state.gex_type)
+        )
+
+        # Update session state when GEX type changes
+        if gex_type != st.session_state.gex_type:
+            st.session_state.gex_type = gex_type
+            st.rerun()
+
 # Call the regular function instead of the fragment
 chart_settings()
 
@@ -1071,17 +1086,20 @@ def create_exposure_bar_chart(calls, puts, exposure_type, title, S):
     puts_filtered = puts[(puts['strike'] >= min_strike) & (puts['strike'] <= max_strike)]
 
     # Calculate Net Exposure based on type using filtered data
-    if exposure_type == 'DEX':
+    if exposure_type == 'GEX':
+        if st.session_state.gex_type == 'Net':
+            net_exposure = calls_filtered.groupby('strike')[exposure_type].sum() - puts_filtered.groupby('strike')[exposure_type].sum()
+        else:  # Absolute
+            calls_gex = calls_filtered.groupby('strike')[exposure_type].sum()
+            puts_gex = puts_filtered.groupby('strike')[exposure_type].sum()
+            net_exposure = pd.Series(index=set(calls_gex.index) | set(puts_gex.index))
+            for strike in net_exposure.index:
+                call_val = abs(calls_gex.get(strike, 0))
+                put_val = abs(puts_gex.get(strike, 0))
+                net_exposure[strike] = call_val if call_val >= put_val else -put_val
+    elif exposure_type == 'DEX':
         net_exposure = calls_filtered.groupby('strike')[exposure_type].sum() + puts_filtered.groupby('strike')[exposure_type].sum()
-    elif exposure_type == 'GEX':
-        net_exposure = calls_filtered.groupby('strike')[exposure_type].sum() - puts_filtered.groupby('strike')[exposure_type].sum()
-    elif exposure_type == 'VEX':
-        net_exposure = calls_filtered.groupby('strike')[exposure_type].sum() + puts_filtered.groupby('strike')[exposure_type].sum()
-    elif exposure_type == 'Charm':
-        net_exposure = calls_filtered.groupby('strike')[exposure_type].sum() + puts_filtered.groupby('strike')[exposure_type].sum()
-    elif exposure_type == 'Speed':
-        net_exposure = calls_filtered.groupby('strike')[exposure_type].sum() + puts_filtered.groupby('strike')[exposure_type].sum()
-    elif exposure_type == 'Vomma':
+    else:  # VEX, Charm, Speed, Vomma
         net_exposure = calls_filtered.groupby('strike')[exposure_type].sum() + puts_filtered.groupby('strike')[exposure_type].sum()
 
     # Calculate total Greek values
