@@ -16,7 +16,9 @@ from scipy.stats import norm
 import requests
 import json
 import base64
+import threading
 from random import randint
+from contextlib import contextmanager
 
 def get_live_price(t):
     try:
@@ -51,7 +53,22 @@ def get_live_price(t):
     except Exception:
         return None
 
-st.set_page_config(layout="wide")
+# Add thread context management
+@contextmanager
+def st_thread_context():
+    """Thread context management for Streamlit"""
+    try:
+        if not hasattr(threading.current_thread(), '_StreamlitThread__cached_st'):
+           
+            import warnings
+            warnings.filterwarnings('ignore', category=RuntimeWarning, message='.*missing ScriptRunContext.*')
+        yield
+    finally:
+        pass
+
+
+with st_thread_context():
+    st.set_page_config(layout="wide")
 
 # Initialize session state for colors if not already set
 if 'call_color' not in st.session_state:
@@ -66,11 +83,15 @@ def format_ticker(ticker):
     """Helper function to format tickers for indices"""
     ticker = ticker.upper()
     if ticker == "SPX":
-        return "%5ESPX"
+        return "^SPX"
     elif ticker == "NDX":
-        return "%5ENDX"
+        return "^NDX"
     elif ticker == "VIX":
         return "^VIX"
+    elif ticker == "DJI":
+        return "^DJI"
+    elif ticker == "RUT":
+        return "^RUT"
     return ticker
 
 @st.cache_data(ttl=10)  # Use fixed 10 second TTL
@@ -82,7 +103,6 @@ def fetch_options_for_date(ticker, date):
     print(f"Fetching option chain for {ticker} EXP {date}")
     stock = yf.Ticker(ticker)
     try:
-        # Get cached price instead of letting yfinance fetch it again
         current_price = get_current_price(ticker)
         chain = stock.option_chain(date)
         calls = chain.calls
@@ -139,6 +159,28 @@ def add_current_price_line(fig, current_price):
         annotation_position="top",
     )
     return fig
+
+def get_screener_data(screener_type):
+    """Fetch screener data from Yahoo Finance"""
+    try:
+        response = yf.screen(screener_type)
+        if isinstance(response, dict) and 'quotes' in response:
+            data = []
+            for quote in response['quotes']:
+                # Extract relevant information
+                info = {
+                    'symbol': quote.get('symbol', ''),
+                    'shortName': quote.get('shortName', ''),
+                    'regularMarketPrice': quote.get('regularMarketPrice', 0),
+                    'regularMarketChangePercent': quote.get('regularMarketChangePercent', 0),
+                    'regularMarketVolume': quote.get('regularMarketVolume', 0),
+                }
+                data.append(info)
+            return pd.DataFrame(data)
+        return pd.DataFrame()
+    except Exception as e:
+        print(f"Error fetching screener data: {e}")
+        return pd.DataFrame()
 
 # -------------------------------
 # Fetch all options experations and add extract expiry
@@ -602,7 +644,9 @@ def reset_session_state():
         'show_net',
         'strike_range',
         'chart_type',
-        'refresh_rate'  # Add refresh rate to preserved keys
+        'refresh_rate',
+        'intraday_chart_type',
+        'candlestick_type' 
     }
     
     # Initialize visibility settings if they don't exist
@@ -747,6 +791,36 @@ def chart_settings():
         new_call_color = st.color_picker("Calls", st.session_state.call_color)
         new_put_color = st.color_picker("Puts", st.session_state.put_color)
         
+        # Add intraday chart type selection
+        if 'intraday_chart_type' not in st.session_state:
+            st.session_state.intraday_chart_type = 'Candlestick'
+        
+        if 'candlestick_type' not in st.session_state:
+            st.session_state.candlestick_type = 'Filled'
+        
+        intraday_type = st.selectbox(
+            "Intraday Chart Type:",
+            options=['Candlestick', 'Line'],
+            index=['Candlestick', 'Line'].index(st.session_state.intraday_chart_type)
+        )
+        
+        # Only show candlestick type selection when candlestick chart is selected
+        if intraday_type == 'Candlestick':
+            candlestick_type = st.selectbox(
+                "Candlestick Style:",
+                options=['Filled', 'Hollow'],
+                index=['Filled', 'Hollow'].index(st.session_state.candlestick_type)
+            )
+            
+            if candlestick_type != st.session_state.candlestick_type:
+                st.session_state.candlestick_type = candlestick_type
+                st.rerun()
+        
+        # Update session state when intraday chart type changes
+        if intraday_type != st.session_state.intraday_chart_type:
+            st.session_state.intraday_chart_type = intraday_type
+            st.rerun()
+
         # Add text size control
         if 'chart_text_size' not in st.session_state:
             st.session_state.chart_text_size = 12  # Default text size
@@ -2039,7 +2113,7 @@ elif st.session_state.current_page == "Dashboard":
                     if calls is None or puts is None:
                         st.stop()
                         
-                    # Rest of the dashboard code
+
                     fig_gamma = create_exposure_bar_chart(calls, puts, "GEX", "Gamma Exposure by Strike", S)
                     fig_vanna = create_exposure_bar_chart(calls, puts, "VEX", "Vanna Exposure by Strike", S)
                     fig_delta = create_exposure_bar_chart(calls, puts, "DEX", "Delta Exposure by Strike", S)
@@ -2057,16 +2131,55 @@ elif st.session_state.current_page == "Dashboard":
                         fig_intraday.layout.shapes = []
                         fig_intraday.layout.annotations = []
                         
-                        # Add price trace
-                        fig_intraday.add_trace(
-                            go.Scatter(
-                                x=intraday_data.index,
-                                y=intraday_data['Close'],
-                                name="Price",
-                                line=dict(color='gold')
-                            ),
-                            secondary_y=False
-                        )
+                        # Add either candlestick or line trace based on selection
+                        if st.session_state.intraday_chart_type == 'Candlestick':
+                            # Set colors based on candlestick type
+                            if st.session_state.candlestick_type == 'Hollow':
+                                fig_intraday.add_trace(
+                                    go.Candlestick(
+                                        x=intraday_data.index,
+                                        open=intraday_data['Open'],
+                                        high=intraday_data['High'],
+                                        low=intraday_data['Low'],
+                                        close=intraday_data['Close'],
+                                        name="Price",
+                                        increasing=dict(
+                                            line=dict(color=st.session_state.call_color),
+                                            fillcolor='rgba(0,0,0,0)'
+                                        ),
+                                        decreasing=dict(
+                                            line=dict(color=st.session_state.put_color),
+                                            fillcolor='rgba(0,0,0,0)'
+                                        )
+                                    ),
+                                    secondary_y=False
+                                )
+                            else:  # Filled candlesticks
+                                fig_intraday.add_trace(
+                                    go.Candlestick(
+                                        x=intraday_data.index,
+                                        open=intraday_data['Open'],
+                                        high=intraday_data['High'],
+                                        low=intraday_data['Low'],
+                                        close=intraday_data['Close'],
+                                        name="Price",
+                                        increasing_line_color=st.session_state.call_color,
+                                        decreasing_line_color=st.session_state.put_color,
+                                        increasing_fillcolor=st.session_state.call_color,
+                                        decreasing_fillcolor=st.session_state.put_color
+                                    ),
+                                    secondary_y=False
+                                )
+                        else:  # Line chart remains the same
+                            fig_intraday.add_trace(
+                                go.Scatter(
+                                    x=intraday_data.index,
+                                    y=intraday_data['Close'],
+                                    name="Price",
+                                    line=dict(color='gold')
+                                ),
+                                secondary_y=False
+                            )
                         
                         # Only add price annotation if we have a valid price
                         if current_price is not None:
@@ -2081,10 +2194,20 @@ elif st.session_state.current_page == "Dashboard":
                                 font=dict(color='yellow', size=15)
                             )
                             
-                            # Update y-axis range to include current price and market open price
+                            # Calculate y-axis range with less aggressive padding
                             market_open_price = intraday_data['Open'].iloc[0]
-                            y_min = min(intraday_data['Close'].min(), current_price, market_open_price) * 0.9995
-                            y_max = max(intraday_data['Close'].max(), current_price, market_open_price) * 1.0005
+                            price_range = max(intraday_data['High'].max(), current_price) - min(intraday_data['Low'].min(), current_price)
+                            padding = price_range * 0.05  # Use 5% padding instead
+                            
+                            y_min = min(intraday_data['Low'].min(), current_price, market_open_price) - padding
+                            y_max = max(intraday_data['High'].max(), current_price, market_open_price) + padding
+                            
+                            # Ensure there's always some minimum range to prevent crushing
+                            if abs(y_max - y_min) < (current_price * 0.001):  # Minimum 0.1% range
+                                center = (y_max + y_min) / 2
+                                y_min = center * 0.999
+                                y_max = center * 1.001
+                            
                             fig_intraday.update_yaxes(range=[y_min, y_max])
 
                         # Process options data
@@ -2098,32 +2221,32 @@ elif st.session_state.current_page == "Dashboard":
                         if options_df.empty:
                             st.warning("Intraday Data will display near market open.")
                         else:
+                            # Get all GEX levels sorted by absolute value and distance from current price
                             top5 = options_df.nlargest(5, 'GEX')[['strike', 'GEX', 'OptionType']]
                             
-                            # Find max GEX value for color scaling
+                            # Sort by distance from current price for zoom calculation
+                            top5['distance'] = abs(top5['strike'] - current_price)
+                            nearest_3 = top5.nsmallest(3, 'distance')
+                            
+                            # Find max GEX value for color scaling using all top 5
                             max_gex = abs(top5['GEX']).max()
                             
-                            # Add GEX levels
+                            # Add all GEX levels
                             for row in top5.itertuples():
                                 if row.strike not in added_strikes:
                                     # Ensure intensity is not NaN and within valid range
                                     if not pd.isna(row.GEX) and row.GEX != 0:
-                                        # Modified color intensity calculation - now ranges from 0.4 to 1.0
                                         intensity = 0.4 + (min(abs(row.GEX) / max_gex, 1.0) * 0.6)
                                         
-                                        # Ensure intensity is within valid range
                                         if not pd.isna(intensity) and 0 <= intensity <= 1:
-                                            # Create RGB color based on option type and intensity
                                             if row.OptionType == 'Call':
                                                 base_color = st.session_state.call_color
                                             else:
                                                 base_color = st.session_state.put_color
                                                 
-                                            # Convert hex to RGB and apply intensity
                                             rgb = tuple(int(base_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
                                             color = f'rgba({rgb[0]}, {rgb[1]}, {rgb[2]}, {intensity})'
                                             
-                                            # Add horizontal line
                                             fig_intraday.add_shape(
                                                 type='line',
                                                 x0=intraday_data.index[0],
@@ -2132,10 +2255,10 @@ elif st.session_state.current_page == "Dashboard":
                                                 y1=row.strike,
                                                 line=dict(color=color, width=2),
                                                 xref='x',
-                                                yref='y'
+                                                yref='y',
+                                                layer='below'
                                             )
                                             
-                                            # Add GEX annotation with matching color
                                             fig_intraday.add_annotation(
                                                 x=intraday_data.index[-1],
                                                 y=row.strike,
@@ -2150,23 +2273,34 @@ elif st.session_state.current_page == "Dashboard":
                                             
                                             added_strikes.add(row.strike)
                             
-                            # Adjust y-axis range to fit all top 5 GEX strikes and market open price
-                            all_strikes = top5['strike'].tolist() + [current_price, market_open_price]
-                            y_min = min(all_strikes) * 0.9995
-                            y_max = max(all_strikes) * 1.0005
-                            fig_intraday.update_yaxes(range=[y_min, y_max])
+                            # Set y-axis range based on price data and nearest 3 GEX levels
+                            y_min = min(
+                                min(intraday_data['Low'].min(), current_price),
+                                nearest_3['strike'].min()
+                            ) * 0.9995
+                            
+                            y_max = max(
+                                max(intraday_data['High'].max(), current_price),
+                                nearest_3['strike'].max()
+                            ) * 1.0005
 
-                        # Update layout
-                        fig_intraday.update_layout(
-                            title=f"Intraday Price for {ticker}",
-                            height=600,
-                            hovermode='x unified',
-                            margin=dict(r=150, l=50),
-                            xaxis=dict(autorange=True),
-                            yaxis=dict(autorange=True)
-                        )
-                        fig_intraday.update_xaxes(title_text="Time")
-                        fig_intraday.update_yaxes(title_text="Price", secondary_y=False)
+                    
+                            # Update layout with interactive features
+                            fig_intraday.update_layout(
+                                title=f"Intraday Price for {ticker}",
+                                height=600,
+                                hovermode='x unified',
+                                margin=dict(r=150, l=50),
+                                xaxis=dict(
+                                    autorange=True,
+                                    rangeslider=dict(visible=False)
+                                ),
+                                yaxis=dict(
+                                    range=[y_min, y_max],
+                                    autorange=False,
+                                    fixedrange=False
+                                )
+                            )
 
                     
                     # Calculate volume ratio
@@ -2201,12 +2335,32 @@ elif st.session_state.current_page == "Dashboard":
                      ])
 
                     
-                    # Add current price display here, before the charts
                     if 'saved_ticker' in st.session_state and st.session_state.saved_ticker:
                         current_price = get_current_price(st.session_state.saved_ticker)
                         if current_price:
+                            gainers_df = get_screener_data("day_gainers")
+                            losers_df = get_screener_data("day_losers")
+                            
+                            if not gainers_df.empty and not losers_df.empty:
+                                market_text = (
+                                    "<span style='color: gray; font-size: 14px;'>Gainers:</span> "
+                                    + " ".join([
+                                        f"<span style='color: {st.session_state.call_color}'>"
+                                        f"{gainer['symbol']}: +{gainer['regularMarketChangePercent']:.1f}%</span> "
+                                        for _, gainer in gainers_df.head().iterrows()
+                                    ])
+                                    + " | <span style='color: gray; font-size: 14px;'>Losers:</span> "
+                                    + " ".join([
+                                        f"<span style='color: {st.session_state.put_color}'>"
+                                        f"{loser['symbol']}: {loser['regularMarketChangePercent']:.1f}%</span> "
+                                        for _, loser in losers_df.head().iterrows()
+                                    ])
+                                )
+                                st.markdown(market_text, unsafe_allow_html=True)
+                            
                             st.markdown(f"#### Current Price: ${current_price:.2f}")
                             st.markdown("---")
+
                     
                     # Display selected charts
                     if "Intraday Price" in selected_charts:
@@ -2235,7 +2389,7 @@ elif st.session_state.current_page == "Dashboard":
                     for i in range(0, len(supplemental_charts), 2):
                         cols = st.columns(2)
                         for j, chart in enumerate(supplemental_charts[i:i+2]):
-                            if chart is not None:  # Add null check for charts
+                            if chart is not None: 
                                 cols[j].plotly_chart(chart, use_container_width=True)
 
                 else:
@@ -2297,7 +2451,7 @@ elif st.session_state.current_page == "Max Pain":
                     st.markdown(f"### Call Max Pain Strike: ${call_max_pain_strike:.2f}")
                     st.markdown(f"### Put Max Pain Strike: ${put_max_pain_strike:.2f}")
                     st.markdown(f"### Current Price: ${S:.2f}")
-                    st.markdown(f"### Distance to Max Pain: ${abs(S - max_pain_strike):.2f}")
+                    st.markdown(f"### Distance to Max Pain: ${abs(S - max_pain_strike)::.2f}")
                     
                     # Create and display the max pain chart
                     fig = create_max_pain_chart(all_calls, all_puts, S)
