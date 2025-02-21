@@ -20,39 +20,6 @@ import threading
 from random import randint
 from contextlib import contextmanager
 
-def get_live_price(t):
-    try:
-        d = datetime.now().strftime("%Y-%m-%d")
-        # Hash the base URL
-        base = base64.b64decode("aHR0cHM6Ly9hcGkuMGR0ZXNweC5jb20=").decode()
-        u = f"{base}/aggregateData?series={t}&date={d}&interval=5"
-        
-        # Hash the headers
-        h = {
-            base64.b64decode("YWNjZXB0").decode(): "*/*",
-            base64.b64decode("YWNjZXB0LWxhbmd1YWdl").decode(): "en-US,en;q=0.9", 
-            base64.b64decode("Y2FjaGUtY29udHJvbA==").decode(): "no-cache",
-            base64.b64decode("cHJhZ21h").decode(): "no-cache",
-            base64.b64decode("cHJpb3JpdHk=").decode(): "u=1, i",
-            base64.b64decode("c2VjLWNoLXVh").decode(): "\"Not(A:Brand\";v=\"99\", \"Google Chrome\";v=\"133\", \"Chromium\";v=\"133\"",
-            base64.b64decode("c2VjLWNoLXVhLW1vYmlsZQ==").decode(): "?0",
-            base64.b64decode("c2VjLWNoLXVhLXBsYXRmb3Jt").decode(): "\"Windows\"",
-            base64.b64decode("c2VjLWZldGNoLWRlc3Q=").decode(): "empty",
-            base64.b64decode("c2VjLWZldGNoLW1vZGU=").decode(): "cors",
-            base64.b64decode("c2VjLWZldGNoLXNpdGU=").decode(): "same-site",
-            base64.b64decode("UmVmZXJlcg==").decode(): base64.b64decode("aHR0cHM6Ly8wZHRlc3B4LmNvbS8=").decode(),
-            base64.b64decode("UmVmZXJlci1Qb2xpY3k=").decode(): "strict-origin-when-cross-origin"
-        }
-        
-        r = requests.get(u, headers=h, timeout=5)
-        d = r.json()
-        if d and isinstance(d, list):
-            l = d[-1]
-            if t.lower() in l:
-                return l[t.lower()]
-    except Exception:
-        return None
-
 # Add thread context management
 @contextmanager
 def st_thread_context():
@@ -257,14 +224,16 @@ def get_current_price(ticker):
     print(f"Fetching current price for {ticker}")
     formatted_ticker = ticker.replace('%5E', '^')
     
-    # Try EzApi first for SPX
     if formatted_ticker in ['^SPX'] or ticker in ['%5ESPX', 'SPX']:
         try:
-            live_price = get_live_price('spx')
-            if live_price is not None:
-                return round(float(live_price), 2)
+            gspc = yf.Ticker('^GSPC')
+            price = gspc.info.get("regularMarketPrice")
+            if price is None:
+                price = gspc.fast_info.get("lastPrice")
+            if price is not None:
+                return round(float(price), 2)
         except Exception as e:
-            print(f"EzApi failed for SPX: {str(e)}")
+            print(f"Error fetching SPX price: {str(e)}")
     
     try:
         stock = yf.Ticker(ticker)
@@ -609,19 +578,22 @@ def get_combined_intraday_data(ticker):
     yahoo_last_price = intraday_data['Close'].iloc[-1] if not intraday_data.empty else None
     latest_price = yahoo_last_price
     
-    # Try EzApi first for SPX
+    # Use ^GSPC for SPX
     if formatted_ticker in ['^SPX'] or ticker in ['%5ESPX', 'SPX']:
         try:
-            live_price = get_live_price('spx')
-            if live_price is not None:
-                latest_price = round(float(live_price), 2)
+            gspc = yf.Ticker('^GSPC')
+            price = gspc.info.get("regularMarketPrice")
+            if price is None:
+                price = gspc.fast_info.get("lastPrice")
+            if price is not None:
+                latest_price = round(float(price), 2)
                 last_idx = intraday_data.index[-1]
                 intraday_data.loc[last_idx, 'Close'] = latest_price
                 intraday_data.loc[last_idx, 'Open'] = latest_price
                 intraday_data.loc[last_idx, 'High'] = max(latest_price, intraday_data.loc[last_idx, 'High'])
                 intraday_data.loc[last_idx, 'Low'] = min(latest_price, intraday_data.loc[last_idx, 'Low'])
         except Exception as e:
-            print(f"EzApi failed for intraday data: {str(e)}")
+            print(f"Error fetching SPX price: {str(e)}")
             latest_price = yahoo_last_price
     
     return intraday_data, latest_price
