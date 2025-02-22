@@ -569,8 +569,25 @@ def get_combined_intraday_data(ticker):
     formatted_ticker = ticker.replace('%5E', '^')
     stock = yf.Ticker(ticker)
     intraday_data = stock.history(period="1d", interval="1m")
+    
+    # Filter for market hours (9:30 AM to 4:00 PM ET)
+    if not intraday_data.empty:
+        intraday_data.index = intraday_data.index.tz_localize(None)
+        market_start = pd.Timestamp(intraday_data.index[0].date()).replace(hour=9, minute=30)
+        market_end = pd.Timestamp(intraday_data.index[0].date()).replace(hour=16, minute=0)
+        intraday_data = intraday_data.between_time('9:30', '16:00')
+    
     if intraday_data.empty:
-        return None, None
+        return None, None, None
+    
+    # Get VIX data if overlay is enabled
+    vix_data = None
+    if st.session_state.show_vix_overlay:
+        vix = yf.Ticker('^VIX')
+        vix_intraday = vix.history(period="1d", interval="1m")
+        if not vix_intraday.empty:
+            vix_intraday.index = vix_intraday.index.tz_localize(None)
+            vix_data = vix_intraday.between_time('9:30', '16:00')
     
     intraday_data = intraday_data.copy()
     yahoo_last_price = intraday_data['Close'].iloc[-1] if not intraday_data.empty else None
@@ -594,7 +611,7 @@ def get_combined_intraday_data(ticker):
             print(f"Error fetching SPX price: {str(e)}")
             latest_price = yahoo_last_price
     
-    return intraday_data, latest_price
+    return intraday_data, latest_price, vix_data
 
 def create_iv_surface(calls_df, puts_df, current_price, selected_dates=None):
     """Create data for IV surface plot with enhanced smoothing and data validation."""
@@ -837,7 +854,6 @@ if st.session_state.previous_page != new_page:
     for key in expiry_selection_keys:
         if key in st.session_state:
             del st.session_state[key]
-    st.rerun()
 
 # Add after st.sidebar.title("Navigation")
 def chart_settings():
@@ -869,12 +885,18 @@ def chart_settings():
             
             if candlestick_type != st.session_state.candlestick_type:
                 st.session_state.candlestick_type = candlestick_type
-                st.rerun()
         
         # Update session state when intraday chart type changes
         if intraday_type != st.session_state.intraday_chart_type:
             st.session_state.intraday_chart_type = intraday_type
-            st.rerun()
+
+        if 'show_vix_overlay' not in st.session_state:
+            st.session_state.show_vix_overlay = False
+        
+        show_vix = st.checkbox("VIX Overlay", value=st.session_state.show_vix_overlay)
+        
+        if show_vix != st.session_state.show_vix_overlay:
+            st.session_state.show_vix_overlay = show_vix
 
         # Add text size control
         if 'chart_text_size' not in st.session_state:
@@ -892,13 +914,11 @@ def chart_settings():
         # Update session state and trigger rerun if text size changes
         if new_text_size != st.session_state.chart_text_size:
             st.session_state.chart_text_size = new_text_size
-            st.rerun()
         
         # Update session state and trigger rerun if either color changes
         if new_call_color != st.session_state.call_color or new_put_color != st.session_state.put_color:
             st.session_state.call_color = new_call_color
             st.session_state.put_color = new_put_color
-            st.rerun()
 
         st.write("Show/Hide Elements:")
         # Initialize visibility settings if not already set
@@ -919,7 +939,6 @@ def chart_settings():
             st.session_state.show_calls = show_calls
             st.session_state.show_puts = show_puts
             st.session_state.show_net = show_net
-            st.rerun()
 
         # Initialize strike range in session state
         if 'strike_range' not in st.session_state:
@@ -947,7 +966,6 @@ def chart_settings():
         # Update session state when chart type changes
         if chart_type != st.session_state.chart_type:
             st.session_state.chart_type = chart_type
-            st.rerun()
 
         # Add refresh rate control before chart type
         if 'refresh_rate' not in st.session_state:
@@ -981,7 +999,6 @@ def chart_settings():
         # Update session state when GEX type changes
         if gex_type != st.session_state.gex_type:
             st.session_state.gex_type = gex_type
-            st.rerun()
 
 # Call the regular function instead of the fragment
 chart_settings()
@@ -2106,7 +2123,7 @@ elif st.session_state.current_page == "Calculated Greeks":
                 
                 if expiry_date_str:  # Only proceed if an expiry date is selected
                     
-                    selected_expiry = datetime.strptime(expiry_date_str, "%Y-%m-%d").date()
+                    selected_expiry = datetime.strptime(expiry_date_str, '%Y-%m-%d').date()
                     calls, puts = fetch_options_for_date(ticker, expiry_date_str, S)
                     
                     if calls.empty and puts.empty:
@@ -2248,7 +2265,7 @@ elif st.session_state.current_page == "Dashboard":
                     fig_vomma = create_exposure_bar_chart(calls, puts, "Vomma", "Vomma Exposure by Strike", S)
                     
                     # Intraday price chart
-                    intraday_data, current_price = get_combined_intraday_data(ticker)
+                    intraday_data, current_price, vix_data = get_combined_intraday_data(ticker)
                     if intraday_data is None or current_price is None:
                         st.warning("No intraday data available for this ticker.")
                     else:
@@ -2307,6 +2324,44 @@ elif st.session_state.current_page == "Dashboard":
                                 secondary_y=False
                             )
                         
+                        # Add VIX overlay if enabled
+                        if st.session_state.show_vix_overlay and vix_data is not None and not vix_data.empty:
+                            # Normalize VIX data to match price scale
+                            price_min = intraday_data['Low'].min()
+                            price_max = intraday_data['High'].max()
+                            price_range = price_max - price_min
+                            
+                            vix_min = vix_data['Close'].min()
+                            vix_max = vix_data['Close'].max()
+                            vix_range = vix_max - vix_min
+                            
+                            # Scale VIX values to match price range
+                            normalized_vix = price_min + ((vix_data['Close'] - vix_min) * price_range / vix_range)
+                            
+                            fig_intraday.add_trace(
+                                go.Scatter(
+                                    x=vix_data.index,
+                                    y=normalized_vix,
+                                    name='VIX',
+                                    line=dict(color='purple'),
+                                    opacity=0.7
+                                ),
+                                secondary_y=False  # Changed to False to use same y-axis
+                            )
+                            
+                            # Add VIX value annotations on the right side
+                            fig_intraday.add_annotation(
+                                x=vix_data.index[-1],
+                                y=normalized_vix.iloc[-1],
+                                text=f"{vix_data['Close'].iloc[-1]:.2f}",
+                                showarrow=False,
+                                arrowhead=1,
+                                xshift=16,
+                                ax=50,
+                                ay=0,
+                                font=dict(color='purple', size=15)
+                            )
+
                         # Only add price annotation if we have a valid price
                         if current_price is not None:
                             fig_intraday.add_annotation(
@@ -2645,81 +2700,75 @@ if st.session_state.get('current_page') == "IV Surface":
             try:
                 # Fetch options data
                 with st.spinner('Fetching options data...'):
-                    all_calls = []
-                    all_puts = []
+                    all_data = []  # Store all IV data
 
-                    for date in selected_expiry_dates:
-                        calls, puts = fetch_options_for_date(ticker, date, S)
-                        if not calls.empty:
-                            all_calls.append(calls)
-                        if not puts.empty:
-                            all_puts.append(puts)
+                    # Calculate strike range using strike_range setting
+                    strike_range = st.session_state.strike_range
+                    min_strike = S - strike_range
+                    max_strike = S + strike_range
 
-                    if all_calls and all_puts:
-                        all_calls = pd.concat(all_calls, ignore_index=True)
-                        all_puts = pd.concat(all_puts, ignore_index=True)
-                    else:
-                        st.warning("No options data available for selected dates.")
+                    for exp_date in selected_expiry_dates:
+                        expiry_date = datetime.strptime(exp_date, '%Y-%m-%d').date()
+                        days_to_exp = (expiry_date - datetime.now().date()).days
+                        calls, puts = fetch_options_for_date(ticker, exp_date, S)
+
+                        # Filter strikes within range
+                        calls = calls[(calls['strike'] >= min_strike) & (calls['strike'] <= max_strike)]
+                        puts = puts[(puts['strike'] >= min_strike) & (puts['strike'] <= max_strike)]
+
+                        for strike in sorted(set(calls['strike'].unique()) | set(puts['strike'].unique())):
+                            call_iv = calls[calls['strike'] == strike]['impliedVolatility'].mean()
+                            put_iv = puts[puts['strike'] == strike]['impliedVolatility'].mean()
+                            iv = np.nanmean([call_iv, put_iv])
+                            if not np.isnan(iv):
+                                all_data.append({
+                                    'strike': strike,
+                                    'days': days_to_exp,
+                                    'iv': iv * 100  # Convert to percentage
+                                })
+
+                    if not all_data:
+                        st.warning("No valid IV data available within strike range.")
                         st.stop()
 
-                    # Filter IV to a reasonable range
-                    all_calls = all_calls[all_calls['impliedVolatility'].between(0.0001, 5)]
-                    all_puts = all_puts[all_puts['impliedVolatility'].between(0.0001, 5)]
+                    # Convert to DataFrame
+                    df = pd.DataFrame(all_data)
 
-                    if all_calls.empty and all_puts.empty:
-                        st.warning("No valid implied volatility data available after filtering.")
-                        st.stop()
+                    # Create custom colorscale using call/put colors
+                    call_rgb = [int(st.session_state.call_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4)]
+                    put_rgb = [int(st.session_state.put_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4)]
+                    custom_colorscale = [
+                        [0, f'rgb({put_rgb[0]}, {put_rgb[1]}, {put_rgb[2]})'],
+                        [0.5, 'rgb(255, 215, 0)'],  # Gold at center
+                        [1, f'rgb({call_rgb[0]}, {call_rgb[1]}, {call_rgb[2]})']
+                    ]
 
-                # Calculate days to expiration
-                def days_to_expiration(date):
-                    return (date - datetime.now().date()).days
-
-                # Prepare data
-                surface_data = []
-                for exp_date in selected_expiry_dates:
-                    expiry_date = datetime.strptime(exp_date, '%Y-%m-%d').date()
-                    days_to_exp = days_to_expiration(expiry_date)
-                    calls = all_calls[all_calls['extracted_expiry'] == expiry_date]
-                    puts = all_puts[all_puts['extracted_expiry'] == expiry_date]
-
-                    strikes = sorted(set(calls['strike'].unique()) | set(puts['strike'].unique()))
-                    for strike in strikes:
-                        call_iv = calls[calls['strike'] == strike]['impliedVolatility'].mean()
-                        put_iv = puts[puts['strike'] == strike]['impliedVolatility'].mean()
-                        iv = np.nanmean([call_iv, put_iv]) * 100  # Convert to percentage
-                        if not np.isnan(iv):
-                            surface_data.append({
-                                'strike': strike,
-                                'days': days_to_exp,
-                                'iv': iv
-                            })
-
-                if not surface_data:
-                    st.warning("Insufficient data to create chart.")
-                    st.stop()
-
-                # Convert to DataFrame
-                df = pd.DataFrame(surface_data)
-
-                # Plot based on number of selected dates
-                with st.spinner('Creating chart...'):
                     if len(selected_expiry_dates) == 1:
-                        # 2D Plot: IV vs Strike Price
+                        # 2D Plot
                         fig = go.Figure()
 
-                        # Filter data for the single expiration date
+                        # Filter data for single expiration
                         single_date_df = df[df['days'] == df['days'].iloc[0]]
+                        
+                        # Calculate center IV for coloring
+                        center_iv = single_date_df['iv'].median()
 
-                        # Add IV curve
-                        fig.add_trace(go.Scatter(
-                            x=single_date_df['strike'],
-                            y=single_date_df['iv'],
-                            mode='lines+markers',
-                            name='Implied Volatility',
-                            line=dict(color='cyan'),
-                            marker=dict(size=6),
-                            hovertemplate='Strike: %{x:.2f}<br>IV: %{y:.2f}%<extra></extra>'
-                        ))
+                        # Create line segments with color gradient based on IV value
+                        for i in range(len(single_date_df) - 1):
+                            iv_val = single_date_df['iv'].iloc[i]
+                            if iv_val >= center_iv:
+                                color = st.session_state.call_color
+                            else:
+                                color = st.session_state.put_color
+                            
+                            fig.add_trace(go.Scatter(
+                                x=single_date_df['strike'].iloc[i:i+2],
+                                y=single_date_df['iv'].iloc[i:i+2],
+                                mode='lines',
+                                line=dict(color=color, width=2),
+                                showlegend=False,
+                                hovertemplate='Strike: %{x:.2f}<br>IV: %{y:.2f}%<extra></extra>'
+                            ))
 
                         # Add current price line
                         fig.add_vline(
@@ -2728,69 +2777,45 @@ if st.session_state.get('current_page') == "IV Surface":
                             line_color="white",
                             opacity=0.7,
                             annotation_text=f"{S:.2f}",
-                            annotation_position="top",
+                            annotation_position="top"
                         )
 
                         # Update layout
+                        padding = strike_range * 0.05
                         fig.update_layout(
                             template="plotly_dark",
-                            title=f'Implied Volatility Skew - {ticker} (Expiration: {selected_expiry_dates[0]})',
+                            title=f'Implied Volatility Surface - {ticker} (Expiration: {selected_expiry_dates[0]})',
                             xaxis_title='Strike Price',
                             yaxis_title='Implied Volatility (%)',
                             yaxis=dict(tickformat='.1f', ticksuffix='%'),
+                            xaxis=dict(range=[min_strike - padding, max_strike + padding]),
                             width=800,
-                            height=600,
-                            legend=dict(x=0.01, y=0.99)
+                            height=600
                         )
-
-                        st.plotly_chart(fig, use_container_width=True)
 
                     else:
                         # 3D Surface Plot
-                        unique_days = df['days'].nunique()
-                        unique_strikes = df['strike'].nunique()
-                        if unique_days < 2 or unique_strikes < 2:
-                            st.warning(
-                                f"Insufficient variation: {unique_days} unique days, "
-                                f"{unique_strikes} unique strikes. Need at least 2 of each for 3D."
-                            )
-                            st.stop()
-
-                        # Create meshgrid
-                        unique_strikes = np.linspace(df['strike'].min(), df['strike'].max(), 50)
-                        unique_days = np.linspace(df['days'].min(), df['days'].max(), 50)
+                        # Create meshgrid for interpolation
+                        unique_strikes = np.linspace(min_strike, max_strike, 200)
+                        unique_days = np.linspace(df['days'].min(), df['days'].max(), 200)
                         X, Y = np.meshgrid(unique_strikes, unique_days)
 
-                        # Interpolate
-                        try:
-                            Z = griddata(
-                                (df['strike'], df['days']),
-                                df['iv'],
-                                (X, Y),
-                                method='cubic',
-                                fill_value=np.nan
-                            )
-                        except Exception as e:
-                            st.warning(f"Cubic interpolation failed: {str(e)}. Using linear interpolation.")
-                            Z = griddata(
-                                (df['strike'], df['days']),
-                                df['iv'],
-                                (X, Y),
-                                method='linear',
-                                fill_value=np.nan
-                            )
-
-                        if np.all(np.isnan(Z)):
-                            st.error("Interpolation failed. Please try different dates.")
-                            st.stop()
+                        # Interpolate surface
+                        Z = griddata(
+                            (df['strike'], df['days']),
+                            df['iv'],
+                            (X, Y),
+                            method='linear',
+                            fill_value=np.nan
+                        )
 
                         # Create 3D surface plot
                         fig = go.Figure()
 
-                        # Add IV surface
+                        # Add IV surface with custom colorscale
                         fig.add_trace(go.Surface(
                             x=X, y=Y, z=Z,
-                            colorscale='Viridis',
+                            colorscale=custom_colorscale,
                             colorbar=dict(
                                 title=dict(text='IV %', side='right'),
                                 tickformat='.1f',
@@ -2804,9 +2829,9 @@ if st.session_state.get('current_page') == "IV Surface":
                             x=[[S, S], [S, S]],
                             y=[[df['days'].min(), df['days'].min()], [df['days'].max(), df['days'].max()]],
                             z=[[df['iv'].min(), df['iv'].max()], [df['iv'].min(), df['iv'].max()]],
-                            opacity=0.2,
+                            opacity=0.3,
                             showscale=False,
-                            colorscale='Reds',
+                            colorscale='oranges',
                             name='Current Price',
                             hovertemplate='Current Price: $%{x:.2f}<extra></extra>'
                         ))
@@ -2814,7 +2839,7 @@ if st.session_state.get('current_page') == "IV Surface":
                         # Update layout
                         fig.update_layout(
                             template="plotly_dark",
-                            title=f'Implied Volatility Surface Skew - {ticker}',
+                            title=f'Implied Volatility Surface - {ticker}',
                             scene=dict(
                                 xaxis=dict(title='Strike Price'),
                                 yaxis=dict(title='Days to Expiration'),
@@ -2824,7 +2849,7 @@ if st.session_state.get('current_page') == "IV Surface":
                             height=800
                         )
 
-                        st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, use_container_width=True)
 
             except Exception as e:
                 st.error(f"Error generating chart: {str(e)}")
@@ -2888,181 +2913,177 @@ elif st.session_state.get('current_page') == "GEX Surface":
             try:
                 # Fetch options data
                 with st.spinner('Fetching options data...'):
-                    all_calls = []
-                    all_puts = []
+                    all_data = []  # Store all computed GEX data
+
+                    # Calculate strike range using strike_range setting
+                    strike_range = st.session_state.strike_range
+                    min_strike = S - strike_range
+                    max_strike = S + strike_range
 
                     for date in selected_expiry_dates:
-                        calls, puts = fetch_options_for_date(ticker, date, S)
-                        if not calls.empty:
-                            all_calls.append(calls)
-                        if not puts.empty:
-                            all_puts.append(puts)
+                        # Compute greeks using the same function as gamma exposure chart
+                        calls, puts, _, t, selected_expiry, today = compute_greeks_and_charts(ticker, date, "gex", S)
+                        
+                        if calls is not None and puts is not None:
+                            days_to_exp = (selected_expiry - today).days
+                            
+                            # Filter and process data within strike range
+                            calls = calls[(calls['strike'] >= min_strike) & (calls['strike'] <= max_strike)]
+                            puts = puts[(puts['strike'] >= min_strike) & (puts['strike'] <= max_strike)]
+                            
+                            for _, row in calls.iterrows():
+                                if not pd.isna(row['GEX']) and abs(row['GEX']) >= 100:
+                                    all_data.append({
+                                        'strike': row['strike'],
+                                        'days': days_to_exp,
+                                        'gex': row['GEX']
+                                    })
+                            
+                            for _, row in puts.iterrows():
+                                if not pd.isna(row['GEX']) and abs(row['GEX']) >= 100:
+                                    all_data.append({
+                                        'strike': row['strike'],
+                                        'days': days_to_exp,
+                                        'gex': -row['GEX']
+                                    })
 
-                    if all_calls and all_puts:
-                        all_calls = pd.concat(all_calls, ignore_index=True)
-                        all_puts = pd.concat(all_puts, ignore_index=True)
-                    else:
-                        st.warning("No options data available for selected dates.")
+                    if not all_data:
+                        st.warning("No valid GEX data available.")
                         st.stop()
 
-                    # Filter data to ensure valid inputs
-                    all_calls = all_calls[
-                        (all_calls['impliedVolatility'].between(0.0001, 5)) &
-                        (all_calls['openInterest'] > 0)
-                    ]
-                    all_puts = all_puts[
-                        (all_puts['impliedVolatility'].between(0.0001, 5)) &
-                        (all_puts['openInterest'] > 0)
-                    ]
+                    # Convert to DataFrame
+                    df = pd.DataFrame(all_data)
 
-                    if all_calls.empty and all_puts.empty:
-                        st.warning("No valid data available after filtering.")
-                        st.stop()
-
-                # Calculate days to expiration
-                def days_to_expiration(date):
-                    days = (date - datetime.now().date()).days
-                    return max(days, 0)  # Ensure non-negative
-
-                # Prepare GEX data
-                surface_data = []
-                today = datetime.now().date()
-                
-                for exp_date in selected_expiry_dates:
-                    expiry_date = datetime.strptime(exp_date, '%Y-%m-%d').date()
-                    days_to_exp = days_to_expiration(expiry_date)
-                    t_years = days_to_exp / 365.0
-                    
-                    calls = all_calls[all_calls['extracted_expiry'] == expiry_date]
-                    puts = all_puts[all_puts['extracted_expiry'] == expiry_date]
-
-                    strikes = sorted(set(calls['strike'].unique()) | set(puts['strike'].unique()))
-                    for strike in strikes:
-                        call_row = calls[calls['strike'] == strike].iloc[0] if not calls[calls['strike'] == strike].empty else None
-                        put_row = puts[puts['strike'] == strike].iloc[0] if not puts[puts['strike'] == strike].empty else None
-                        
-                        gex = 0
-                        if call_row is not None:
-                            gamma_call = bs_gamma('c', S, strike, t_years, 0, call_row['impliedVolatility'])
-                            if gamma_call and not pd.isna(gamma_call):
-                                gex += gamma_call * call_row['openInterest'] * S * S * 100
-                        
-                        if put_row is not None:
-                            gamma_put = bs_gamma('p', S, strike, t_years, 0, put_row['impliedVolatility'])
-                            if gamma_put and not pd.isna(gamma_put):
-                                gex -= gamma_put * put_row['openInterest'] * S * S * 100
-
-                        if abs(gex) > 0 and not pd.isna(gex):
-                            surface_data.append({
-                                'strike': strike,
-                                'days': days_to_exp,
-                                'gex': gex
-                            })
-
-                if not surface_data:
-                    st.warning("Insufficient data to create GEX chart.")
-                    st.stop()
-
-                # Convert to DataFrame
-                df = pd.DataFrame(surface_data)
-
-                # Create 3D surface plot regardless of number of dates
-                with st.spinner('Creating chart...'):
-                    # If only one date is selected, add slight variation in days for 3D
                     if len(selected_expiry_dates) == 1:
-                        df_expanded = []
-                        for _, row in df.iterrows():
-                            # Add three points: original day and tiny variations
-                            df_expanded.append({'strike': row['strike'], 'days': row['days'] - 0.1, 'gex': row['gex']})
-                            df_expanded.append({'strike': row['strike'], 'days': row['days'], 'gex': row['gex']})
-                            df_expanded.append({'strike': row['strike'], 'days': row['days'] + 0.1, 'gex': row['gex']})
-                        df = pd.DataFrame(df_expanded)
-
-                    # Create meshgrid
-                    unique_strikes = np.linspace(df['strike'].min(), df['strike'].max(), 50)
-                    unique_days = np.linspace(df['days'].min(), df['days'].max(), 50)
-                    X, Y = np.meshgrid(unique_strikes, unique_days)
-
-                    # Interpolate
-                    try:
-                        Z = griddata(
-                            (df['strike'], df['days']),
-                            df['gex'],
-                            (X, Y),
-                            method='cubic',
-                            fill_value=np.nan
+                        # 2D Plot for single expiration
+                        fig = go.Figure()
+                        
+                        # Filter data for the single expiration date
+                        single_date_df = df[df['days'] == df['days'].iloc[0]]
+                        
+                        # Group by strike and sum GEX values
+                        grouped_gex = single_date_df.groupby('strike')['gex'].sum().reset_index()
+                        
+                        # Create line plot with color gradient based on GEX sign
+                        for i in range(len(grouped_gex) - 1):
+                            if grouped_gex['gex'].iloc[i] >= 0:
+                                color = st.session_state.call_color
+                            else:
+                                color = st.session_state.put_color
+                                
+                            fig.add_trace(go.Scatter(
+                                x=grouped_gex['strike'].iloc[i:i+2],
+                                y=grouped_gex['gex'].iloc[i:i+2],
+                                mode='lines',
+                                line=dict(color=color, width=2),
+                                showlegend=False,
+                                hovertemplate='Strike: %{x:.2f}<br>GEX: %{y:,.0f}<extra></extra>'
+                            ))
+                        
+                        # Add current price line
+                        fig.add_vline(
+                            x=S,
+                            line_dash="dash",
+                            line_color="white",
+                            opacity=0.7,
+                            annotation_text=f"{S:.2f}",
+                            annotation_position="top"
                         )
-                    except Exception as e:
-                        st.warning(f"Cubic interpolation failed: {str(e)}. Using linear interpolation.")
+                        
+                        # Update layout with adjusted range
+                        padding = (max_strike - min_strike) * 0.05
+                        fig.update_layout(
+                            template="plotly_dark",
+                            title=f'Gamma Exposure Profile - {ticker} (Expiration: {selected_expiry_dates[0]})',
+                            xaxis_title='Strike Price',
+                            yaxis_title='Gamma Exposure',
+                            width=800,
+                            height=600,
+                            xaxis=dict(range=[min_strike - padding, max_strike + padding])
+                        )
+
+                    else:
+                        # 3D Surface Plot for multiple expirations
+                        # Create meshgrid with adjusted strike range
+                        padding = (max_strike - min_strike) * 0.05
+                        unique_strikes = np.linspace(min_strike - padding, max_strike + padding, 200)
+                        unique_days = np.linspace(df['days'].min(), df['days'].max(), 200)
+                        X, Y = np.meshgrid(unique_strikes, unique_days)
+
+                        # Aggregate GEX values by strike and days
+                        df_grouped = df.groupby(['strike', 'days'])['gex'].sum().reset_index()
+
+                        # Interpolation
                         Z = griddata(
-                            (df['strike'], df['days']),
-                            df['gex'],
+                            (df_grouped['strike'], df_grouped['days']),
+                            df_grouped['gex'],
                             (X, Y),
                             method='linear',
-                            fill_value=np.nan
+                            fill_value=0
                         )
 
-                    if np.all(np.isnan(Z)):
-                        st.error("Interpolation failed. Please try different dates.")
-                        st.stop()
+                        # Create custom colorscale using call/put colors
+                        call_rgb = [int(st.session_state.call_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4)]
+                        put_rgb = [int(st.session_state.put_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4)]
+                        
+                        colorscale = [
+                            [0, f'rgb({put_rgb[0]}, {put_rgb[1]}, {put_rgb[2]})'],
+                            [0.5, 'rgb(255, 215, 0)'],  # Gold at zero
+                            [1, f'rgb({call_rgb[0]}, {call_rgb[1]}, {call_rgb[2]})']
+                        ]
 
-                    # Create 3D surface plot
-                    fig = go.Figure()
+                        # Create 3D surface plot
+                        fig = go.Figure()
 
-                    # Add GEX surface
-                    fig.add_trace(go.Surface(
-                        x=X, y=Y, z=Z,
-                        colorscale='Viridis',
-                        colorbar=dict(
-                            title=dict(text='GEX', side='right'),
-                            tickformat=',.0f'
-                        ),
-                        hovertemplate='Strike: %{x:.2f}<br>Days: %{y:.0f}<br>GEX: %{z:,.0f}<extra></extra>'
-                    ))
+                        # Add GEX surface with custom colorscale
+                        fig.add_trace(go.Surface(
+                            x=X, y=Y, z=Z,
+                            colorscale=colorscale,
+                            opacity=1.0,
+                            colorbar=dict(
+                                title=dict(text='Net GEX', side='right'),
+                                tickformat=',.0f'
+                            ),
+                            hovertemplate='Strike: %{x:.2f}<br>Days: %{y:.0f}<br>Net GEX: %{z:,.0f}<extra></extra>'
+                        ))
 
-                    # Add current price plane
-                    fig.add_trace(go.Surface(
-                        x=[[S, S], [S, S]],
-                        y=[[df['days'].min(), df['days'].min()], [df['days'].max(), df['days'].max()]],
-                        z=[[df['gex'].min(), df['gex'].max()], [df['gex'].min(), df['gex'].max()]],
-                        opacity=0.2,
-                        showscale=False,
-                        colorscale='Reds',
-                        name='Current Price',
-                        hovertemplate='Current Price: $%{x:.2f}<extra></extra>'
-                    ))
+                        # Add current price plane
+                        fig.add_trace(go.Surface(
+                            x=[[S, S], [S, S]],
+                            y=[[df['days'].min(), df['days'].min()], [df['days'].max(), df['days'].max()]],
+                            z=[[df['gex'].min(), df['gex'].max()], [df['gex'].min(), df['gex'].max()]],
+                            opacity=0.3,
+                            showscale=False,
+                            colorscale='oranges',
+                            name='Current Price',
+                            hovertemplate='Current Price: $%{x:.2f}<extra></extra>'
+                        ))
 
-                    # Update layout
-                    fig.update_layout(
-                        template="plotly_dark",
-                        title=f'Gamma Exposure Surface - {ticker}',
-                        scene=dict(
-                            xaxis=dict(title='Strike Price'),
-                            yaxis=dict(title='Days to Expiration'),
-                            zaxis=dict(title='Gamma Exposure', tickformat=',.0f')
-                        ),
-                        width=800,
-                        height=800
-                    )
+                        # Update layout
+                        fig.update_layout(
+                            template="plotly_dark",
+                            title=f'Gamma Exposure Surface - {ticker}',
+                            scene=dict(
+                                xaxis=dict(title='Strike Price'),
+                                yaxis=dict(title='Days to Expiration'),
+                                zaxis=dict(title='Gamma Exposure', tickformat=',.0f')
+                            ),
+                            width=800,
+                            height=800
+                        )
 
                     st.plotly_chart(fig, use_container_width=True)
 
             except Exception as e:
                 st.error(f"Error generating chart: {str(e)}")
     st.stop()
+
 # -----------------------------------------
 # Auto-refresh
 # -----------------------------------------
 refresh_rate = float(st.session_state.get('refresh_rate', 10))  # Convert to float
 if not st.session_state.get("loading_complete", False):
     st.session_state.loading_complete = True
-    st.rerun()
-else:
-    time.sleep(refresh_rate)
-    st.rerun()
-
-if not st.session_state.get("initialized", False):
-    st.session_state.initialized = True
     st.rerun()
 else:
     time.sleep(refresh_rate)
