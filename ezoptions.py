@@ -61,8 +61,7 @@ def format_ticker(ticker):
         return "^RUT"
     return ticker
 
-@st.cache_data(ttl=10)  # Use fixed 10 second TTL
-def fetch_options_for_date(ticker, date):
+def fetch_options_for_date(ticker, date, S=None):
     """
     Fetches option chains for the given ticker and date.
     Returns two DataFrames: one for calls and one for puts.
@@ -70,7 +69,8 @@ def fetch_options_for_date(ticker, date):
     print(f"Fetching option chain for {ticker} EXP {date}")
     stock = yf.Ticker(ticker)
     try:
-        current_price = get_current_price(ticker)
+        if S is None:
+            S = get_current_price(ticker)
         chain = stock.option_chain(date)
         calls = chain.calls
         puts = chain.puts
@@ -152,7 +152,6 @@ def get_screener_data(screener_type):
 # -------------------------------
 # Fetch all options experations and add extract expiry
 # -------------------------------
-@st.cache_data(ttl=10)  # Use fixed 10 second TTL
 def fetch_all_options(ticker):
     """
     Fetches option chains for all available expirations for the given ticker.
@@ -218,7 +217,6 @@ def fetch_all_options(ticker):
     return combined_calls, combined_puts
 
 # Charts and price fetching
-@st.cache_data(ttl=10)  # Use fixed 10 second TTL
 def get_current_price(ticker):
     """Get current price with fallback logic"""
     print(f"Fetching current price for {ticker}")
@@ -247,9 +245,8 @@ def get_current_price(ticker):
     
     return None
 
-def create_oi_volume_charts(calls, puts):
-    # Get underlying price
-    S = get_current_price(ticker)
+def create_oi_volume_charts(calls, puts, S):
+    # Remove get_current_price call since S is passed in
     if S is None:
         st.error("Could not fetch underlying price.")
         return
@@ -565,7 +562,6 @@ def fetch_and_process_multiple_dates(ticker, expiry_dates, process_func):
         return combined_calls, combined_puts
     return pd.DataFrame(), pd.DataFrame()
 
-@st.cache_data(ttl=10)  # Use fixed 10 second TTL
 def get_combined_intraday_data(ticker):
     """Get intraday data with fallback logic"""
     formatted_ticker = ticker.replace('%5E', '^')
@@ -918,13 +914,13 @@ def validate_expiry(expiry_date):
     except Exception:
         return False
 
-def compute_greeks_and_charts(ticker, expiry_date_str, page_key):
+def compute_greeks_and_charts(ticker, expiry_date_str, page_key, S):
     """Compute greeks and create charts for options data"""
     if not expiry_date_str:
         st.warning("Please select an expiration date.")
         return None, None, None, None, None, None
         
-    calls, puts = fetch_options_for_date(ticker, expiry_date_str)
+    calls, puts = fetch_options_for_date(ticker, expiry_date_str, S)
     if calls.empty and puts.empty:
         st.warning("No options data available for this ticker.")
         return None, None, None, None, None, None
@@ -936,7 +932,6 @@ def compute_greeks_and_charts(ticker, expiry_date_str, page_key):
     puts = puts[puts['extracted_expiry'] == selected_expiry]
 
     # Always use get_current_price to ensure consistent price source
-    S = get_current_price(ticker)
     if S is None:
         st.error("Could not fetch underlying price.")
         return None, None, None, None, None, None
@@ -1471,6 +1466,12 @@ if st.session_state.current_page == "OI & Volume":
             save_ticker(ticker)  # Save the ticker
         
         if ticker:
+            # Fetch price once
+            S = get_current_price(ticker)
+            if S is None:
+                st.error("Could not fetch current price.")
+                st.stop()
+
             stock = yf.Ticker(ticker)
             available_dates = stock.options
             if not available_dates:
@@ -1486,7 +1487,7 @@ if st.session_state.current_page == "OI & Volume":
                 all_calls, all_puts = fetch_and_process_multiple_dates(
                     ticker,
                     selected_expiry_dates,
-                    fetch_options_for_date
+                    lambda t, d: fetch_options_for_date(t, d, S)  # Pass S to fetch_options_for_date
                 )
                 
                 if all_calls.empty and all_puts.empty:
@@ -1508,7 +1509,7 @@ if st.session_state.current_page == "OI & Volume":
                     with charts_container:
                         st.subheader(f"Options Data for {ticker} (Multiple Expiries)")
                         if not calls_filtered.empty and not puts_filtered.empty:
-                            fig_oi, fig_volume = create_oi_volume_charts(calls_filtered, puts_filtered)
+                            fig_oi, fig_volume = create_oi_volume_charts(calls_filtered, puts_filtered, S)
                             st.plotly_chart(fig_oi, use_container_width=True, key=f"Options Data_oi_chart")
                             st.plotly_chart(fig_volume, use_container_width=True, key=f"Options Data_volume_chart")
                         else:
@@ -1547,6 +1548,12 @@ elif st.session_state.current_page == "Volume Ratio":
             save_ticker(ticker)  # Save the ticker
         
         if ticker:
+            # Fetch price once
+            S = get_current_price(ticker)
+            if S is None:
+                st.error("Could not fetch current price.")
+                st.stop()
+
             stock = yf.Ticker(ticker)
             available_dates = stock.options
             if not available_dates:
@@ -1562,7 +1569,7 @@ elif st.session_state.current_page == "Volume Ratio":
                 all_calls, all_puts = fetch_and_process_multiple_dates(
                     ticker,
                     selected_expiry_dates,
-                    fetch_options_for_date
+                    lambda t, d: fetch_options_for_date(t, d, S)  # Pass S to fetch_options_for_date
                 )
                 
                 if all_calls.empty and all_puts.empty:
@@ -1598,6 +1605,12 @@ elif st.session_state.current_page == "Gamma Exposure":
             save_ticker(ticker)  # Save the ticker
         
         if ticker:
+            # Fetch price once
+            S = get_current_price(ticker)
+            if S is None:
+                st.error("Could not fetch current price.")
+                st.stop()
+
             stock = yf.Ticker(ticker)
             available_dates = stock.options
             if not available_dates:
@@ -1613,7 +1626,7 @@ elif st.session_state.current_page == "Gamma Exposure":
                 all_calls, all_puts = fetch_and_process_multiple_dates(
                     ticker, 
                     selected_expiry_dates,
-                    lambda t, d: compute_greeks_and_charts(t, d, page_name)[:2]  # Only take calls and puts
+                    lambda t, d: compute_greeks_and_charts(t, d, page_name, S)[:2]  # Only take calls and puts
                 )
                 
                 if all_calls.empty and all_puts.empty:
@@ -1630,7 +1643,6 @@ elif st.session_state.current_page == "Gamma Exposure":
                 }
                 
                 exposure_type = exposure_type_map[st.session_state.current_page]
-                S = get_current_price(ticker)
                 
                 # Modify the bar chart title to show multiple dates
                 title = f"{st.session_state.current_page} by Strike ({len(selected_expiry_dates)} dates)"
@@ -1659,6 +1671,12 @@ elif st.session_state.current_page == "Vanna Exposure":
             save_ticker(ticker)  # Save the ticker
         
         if ticker:
+            # Fetch price once
+            S = get_current_price(ticker)
+            if S is None:
+                st.error("Could not fetch current price.")
+                st.stop()
+
             stock = yf.Ticker(ticker)
             available_dates = stock.options
             if not available_dates:
@@ -1674,7 +1692,7 @@ elif st.session_state.current_page == "Vanna Exposure":
                 all_calls, all_puts = fetch_and_process_multiple_dates(
                     ticker, 
                     selected_expiry_dates,
-                    lambda t, d: compute_greeks_and_charts(t, d, page_name)[:2]  # Only take calls and puts
+                    lambda t, d: compute_greeks_and_charts(t, d, page_name, S)[:2]  # Only take calls and puts
                 )
                 
                 if all_calls.empty and all_puts.empty:
@@ -1691,7 +1709,6 @@ elif st.session_state.current_page == "Vanna Exposure":
                 }
                 
                 exposure_type = exposure_type_map[st.session_state.current_page]
-                S = get_current_price(ticker)
                 
                 # Modify the bar chart title to show multiple dates
                 title = f"{st.session_state.current_page} by Strike ({len(selected_expiry_dates)} dates)"
@@ -1720,6 +1737,12 @@ elif st.session_state.current_page == "Delta Exposure":
             save_ticker(ticker)  # Save the ticker
         
         if ticker:
+            # Fetch price once
+            S = get_current_price(ticker)
+            if S is None:
+                st.error("Could not fetch current price.")
+                st.stop()
+
             stock = yf.Ticker(ticker)
             available_dates = stock.options
             if not available_dates:
@@ -1735,7 +1758,7 @@ elif st.session_state.current_page == "Delta Exposure":
                 all_calls, all_puts = fetch_and_process_multiple_dates(
                     ticker, 
                     selected_expiry_dates,
-                    lambda t, d: compute_greeks_and_charts(t, d, page_name)[:2]  # Only take calls and puts
+                    lambda t, d: compute_greeks_and_charts(t, d, page_name, S)[:2]  # Only take calls and puts
                 )
                 
                 if all_calls.empty and all_puts.empty:
@@ -1752,7 +1775,6 @@ elif st.session_state.current_page == "Delta Exposure":
                 }
                 
                 exposure_type = exposure_type_map[st.session_state.current_page]
-                S = get_current_price(ticker)
                 
                 # Modify the bar chart title to show multiple dates
                 title = f"{st.session_state.current_page} by Strike ({len(selected_expiry_dates)} dates)"
@@ -1781,6 +1803,12 @@ elif st.session_state.current_page == "Charm Exposure":
             save_ticker(ticker)  # Save the ticker
         
         if ticker:
+            # Fetch price once
+            S = get_current_price(ticker)
+            if S is None:
+                st.error("Could not fetch current price.")
+                st.stop()
+
             stock = yf.Ticker(ticker)
             available_dates = stock.options
             if not available_dates:
@@ -1796,7 +1824,7 @@ elif st.session_state.current_page == "Charm Exposure":
                 all_calls, all_puts = fetch_and_process_multiple_dates(
                     ticker, 
                     selected_expiry_dates,
-                    lambda t, d: compute_greeks_and_charts(t, d, page_name)[:2]  # Only take calls and puts
+                    lambda t, d: compute_greeks_and_charts(t, d, page_name, S)[:2]  # Only take calls and puts
                 )
                 
                 if all_calls.empty and all_puts.empty:
@@ -1813,7 +1841,6 @@ elif st.session_state.current_page == "Charm Exposure":
                 }
                 
                 exposure_type = exposure_type_map[st.session_state.current_page]
-                S = get_current_price(ticker)
                 
                 # Modify the bar chart title to show multiple dates
                 title = f"{st.session_state.current_page} by Strike ({len(selected_expiry_dates)} dates)"
@@ -1842,6 +1869,12 @@ elif st.session_state.current_page == "Speed Exposure":
             save_ticker(ticker)  # Save the ticker
         
         if ticker:
+            # Fetch price once
+            S = get_current_price(ticker)
+            if S is None:
+                st.error("Could not fetch current price.")
+                st.stop()
+
             stock = yf.Ticker(ticker)
             available_dates = stock.options
             if not available_dates:
@@ -1857,7 +1890,7 @@ elif st.session_state.current_page == "Speed Exposure":
                 all_calls, all_puts = fetch_and_process_multiple_dates(
                     ticker, 
                     selected_expiry_dates,
-                    lambda t, d: compute_greeks_and_charts(t, d, page_name)[:2]  # Only take calls and puts
+                    lambda t, d: compute_greeks_and_charts(t, d, page_name, S)[:2]  # Only take calls and puts
                 )
                 
                 if all_calls.empty and all_puts.empty:
@@ -1874,7 +1907,6 @@ elif st.session_state.current_page == "Speed Exposure":
                 }
                 
                 exposure_type = exposure_type_map[st.session_state.current_page]
-                S = get_current_price(ticker)
                 
                 # Modify the bar chart title to show multiple dates
                 title = f"{st.session_state.current_page} by Strike ({len(selected_expiry_dates)} dates)"
@@ -1903,6 +1935,12 @@ elif st.session_state.current_page == "Vomma Exposure":
             save_ticker(ticker)  # Save the ticker
         
         if ticker:
+            # Fetch price once
+            S = get_current_price(ticker)
+            if S is None:
+                st.error("Could not fetch current price.")
+                st.stop()
+
             stock = yf.Ticker(ticker)
             available_dates = stock.options
             if not available_dates:
@@ -1918,7 +1956,7 @@ elif st.session_state.current_page == "Vomma Exposure":
                 all_calls, all_puts = fetch_and_process_multiple_dates(
                     ticker, 
                     selected_expiry_dates,
-                    lambda t, d: compute_greeks_and_charts(t, d, page_name)[:2]  # Only take calls and puts
+                    lambda t, d: compute_greeks_and_charts(t, d, page_name, S)[:2]  # Only take calls and puts
                 )
                 
                 if all_calls.empty and all_puts.empty:
@@ -1935,7 +1973,6 @@ elif st.session_state.current_page == "Vomma Exposure":
                 }
                 
                 exposure_type = exposure_type_map[st.session_state.current_page]
-                S = get_current_price(ticker)
                 
                 # Modify the bar chart title to show multiple dates
                 title = f"{st.session_state.current_page} by Strike ({len(selected_expiry_dates)} dates)"
@@ -1960,6 +1997,12 @@ elif st.session_state.current_page == "Calculated Greeks":
         ticker = format_ticker(user_ticker)
         
         if ticker:
+            # Fetch price once
+            S = get_current_price(ticker)
+            if S is None:
+                st.error("Could not fetch current price.")
+                st.stop()
+
             stock = yf.Ticker(ticker)
             available_dates = stock.options
             if not available_dates:
@@ -1977,7 +2020,7 @@ elif st.session_state.current_page == "Calculated Greeks":
                 if expiry_date_str:  # Only proceed if an expiry date is selected
                     
                     selected_expiry = datetime.strptime(expiry_date_str, "%Y-%m-%d").date()
-                    calls, puts = fetch_options_for_date(ticker, expiry_date_str)
+                    calls, puts = fetch_options_for_date(ticker, expiry_date_str, S)
                     
                     if calls.empty and puts.empty:
                         st.warning("No options data available for this ticker.")
@@ -2084,6 +2127,12 @@ elif st.session_state.current_page == "Dashboard":
             save_ticker(ticker)  # Save the ticker
         
         if ticker:
+            # Fetch price once
+            S = get_current_price(ticker)
+            if S is None:
+                st.error("Could not fetch current price.")
+                st.stop()
+
             stock = yf.Ticker(ticker)
             available_dates = stock.options
             if not available_dates:
@@ -2099,7 +2148,7 @@ elif st.session_state.current_page == "Dashboard":
                 )
                 
                 if expiry_date_str:  # Only proceed if expiry date is selected
-                    calls, puts, S, t, selected_expiry, today = compute_greeks_and_charts(ticker, expiry_date_str, "dashboard")
+                    calls, puts, _, t, selected_expiry, today = compute_greeks_and_charts(ticker, expiry_date_str, "dashboard", S)
                     if calls is None or puts is None:
                         st.stop()
                         
@@ -2406,6 +2455,12 @@ elif st.session_state.current_page == "Max Pain":
             save_ticker(ticker)
         
         if ticker:
+            # Fetch price once
+            S = get_current_price(ticker)
+            if S is None:
+                st.error("Could not fetch current price.")
+                st.stop()
+
             stock = yf.Ticker(ticker)
             available_dates = stock.options
             if not available_dates:
@@ -2421,16 +2476,11 @@ elif st.session_state.current_page == "Max Pain":
                 all_calls, all_puts = fetch_and_process_multiple_dates(
                     ticker,
                     selected_expiry_dates,
-                    fetch_options_for_date
+                    lambda t, d: fetch_options_for_date(t, d, S)  # Pass S to fetch_options_for_date
                 )
                 
                 if all_calls.empty and all_puts.empty:
                     st.warning("No options data available for the selected dates.")
-                    st.stop()
-
-                S = get_current_price(ticker)
-                if S is None:
-                    st.error("Could not fetch underlying price.")
                     st.stop()
 
                 # Calculate and display max pain
@@ -2441,7 +2491,7 @@ elif st.session_state.current_page == "Max Pain":
                     st.markdown(f"### Call Max Pain Strike: ${call_max_pain_strike:.2f}")
                     st.markdown(f"### Put Max Pain Strike: ${put_max_pain_strike:.2f}")
                     st.markdown(f"### Current Price: ${S:.2f}")
-                    st.markdown(f"### Distance to Max Pain: ${abs(S - max_pain_strike)::.2f}")
+                    st.markdown(f"### Distance to Max Pain: ${abs(S - max_pain_strike):.2f}")
                     
                     # Create and display the max pain chart
                     fig = create_max_pain_chart(all_calls, all_puts, S)
