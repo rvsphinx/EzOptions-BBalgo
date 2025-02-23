@@ -827,7 +827,7 @@ def save_ticker(ticker):
 st.sidebar.title("Navigation")
 pages = ["Dashboard", "Volume Ratio", "OI & Volume", "Gamma Exposure", "Delta Exposure", 
           "Vanna Exposure", "Charm Exposure", "Speed Exposure", "Vomma Exposure", "Max Pain", "GEX Surface", "IV Surface",
-          "Calculated Greeks"]
+          "Analysis", "Calculated Greeks"]
 
 # Track the previous page in session state
 if 'previous_page' not in st.session_state:
@@ -2896,7 +2896,7 @@ elif st.session_state.get('current_page') == "GEX Surface":
 
             # Multiselect for expiration dates with no default selection
             selected_expiry_dates = st.multiselect(
-                "Select Expiration Dates:",
+                "Select Expiration Dates (1 for 2D chart, 2+ for 3D surface):",
                 options=available_dates,
                 default=None,
                 key="gex_date_selector"
@@ -3076,6 +3076,246 @@ elif st.session_state.get('current_page') == "GEX Surface":
 
             except Exception as e:
                 st.error(f"Error generating chart: {str(e)}")
+    st.stop()
+
+elif st.session_state.current_page == "Analysis":
+    main_container = st.container()
+    with main_container:
+        st.empty()
+        col1, col2 = st.columns([0.94, 0.06])
+        with col1:
+            user_ticker = st.text_input("Enter Stock Ticker (e.g., SPY, TSLA, SPX, NDX):", saved_ticker, key="analysis_ticker")
+        with col2:
+            st.write("")  # Add some spacing
+            st.write("")  # Add some spacing
+            if st.button("🔄", key="refresh_button_analysis"):
+                st.cache_data.clear()
+                st.rerun()
+        
+        ticker = format_ticker(user_ticker)
+        
+        if ticker != saved_ticker:
+            st.cache_data.clear()
+            save_ticker(ticker)
+        
+        if ticker:
+            # Fetch price once
+            S = get_current_price(ticker)
+            if S is None:
+                st.error("Could not fetch current price.")
+                st.stop()
+
+            stock = yf.Ticker(ticker)
+            # Fetch 6 months of historical data instead of 1 year
+            historical_data = stock.history(period="6mo", interval="1d")  # Changed from "1y" to "6mo"
+            
+            if historical_data.empty:
+                st.warning("No historical data available for this ticker.")
+                st.stop()
+
+            # Calculate indicators with proper padding
+            lookback = 20  # Standard lookback period
+            padding_data = pd.concat([
+                historical_data['Close'].iloc[:lookback].iloc[::-1],  # Reverse first lookback periods
+                historical_data['Close']
+            ])
+            
+            # Calculate SMA and Bollinger Bands with padding
+            sma_padded = padding_data.rolling(window=lookback).mean()
+            std_padded = padding_data.rolling(window=lookback).std()
+            
+            # Trim padding and assign to historical_data
+            historical_data['SMA'] = sma_padded[lookback:].values
+            historical_data['Upper Band'] = historical_data['SMA'] + 2 * std_padded[lookback:].values
+            historical_data['Lower Band'] = historical_data['SMA'] - 2 * std_padded[lookback:].values
+
+            def calculate_rsi(data, period=14):
+                # Add padding for RSI calculation
+                padding = pd.concat([data.iloc[:period].iloc[::-1], data])
+                delta = padding.diff()
+                gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+                loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+                rs = gain / loss
+                rsi = 100 - (100 / (1 + rs))
+                # Return only the non-padded portion
+                return rsi[period:].values
+
+            historical_data['RSI'] = calculate_rsi(historical_data['Close'])
+            
+            # Calculate GEX with padding for rolling average
+            historical_data['GEX'] = historical_data['Close'].pct_change() * 1000
+            gex_padded = pd.concat([
+                historical_data['GEX'].iloc[:lookback].iloc[::-1],
+                historical_data['GEX']
+            ])
+            historical_data['Rolling GEX Avg'] = gex_padded.rolling(window=lookback).mean()[lookback:].values
+
+            # Create subplots
+            fig = make_subplots(
+                rows=3, 
+                cols=1, 
+                shared_xaxes=True,
+                vertical_spacing=0.1,
+                subplot_titles=(
+                    'Price with SMA and Bollinger Bands',
+                    'GEX with Rolling Average',
+                    'RSI'
+                )
+            )
+
+            # Get colors from session state
+            call_color = st.session_state.call_color
+            put_color = st.session_state.put_color
+
+            # Price and indicators with consistent colors
+            fig.add_trace(
+                go.Scatter(
+                    x=historical_data.index, 
+                    y=historical_data['Close'], 
+                    name='Price', 
+                    line=dict(color='gold')
+                ),
+                row=1, col=1
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=historical_data.index, 
+                    y=historical_data['SMA'], 
+                    name='SMA', 
+                    line=dict(color='purple')
+                ),
+                row=1, col=1
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=historical_data.index, 
+                    y=historical_data['Upper Band'], 
+                    name='Upper Band',
+                    line=dict(color=call_color, dash='dash')
+                ),
+                row=1, col=1
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=historical_data.index, 
+                    y=historical_data['Lower Band'], 
+                    name='Lower Band',
+                    line=dict(color=put_color, dash='dash')
+                ),
+                row=1, col=1
+            )
+
+            # GEX with consistent colors
+            positive_gex = historical_data['GEX'] >= 0
+            negative_gex = historical_data['GEX'] < 0
+
+            # Add positive GEX bars
+            fig.add_trace(
+                go.Bar(
+                    x=historical_data.index[positive_gex],
+                    y=historical_data['GEX'][positive_gex],
+                    name='Positive GEX',
+                    marker_color=call_color
+                ),
+                row=2, col=1
+            )
+
+            # Add negative GEX bars
+            fig.add_trace(
+                go.Bar(
+                    x=historical_data.index[negative_gex],
+                    y=historical_data['GEX'][negative_gex],
+                    name='Negative GEX',
+                    marker_color=put_color
+                ),
+                row=2, col=1
+            )
+
+            # Add rolling average
+            fig.add_trace(
+                go.Scatter(
+                    x=historical_data.index,
+                    y=historical_data['Rolling GEX Avg'],
+                    name='Rolling Average',
+                    line=dict(color='magenta')
+                ),
+                row=2, col=1
+            )
+
+            # RSI with consistent colors
+            fig.add_trace(
+                go.Scatter(
+                    x=historical_data.index,
+                    y=historical_data['RSI'],
+                    name='RSI',
+                    line=dict(color='turquoise')
+                ),
+                row=3, col=1
+            )
+            
+            # Add overbought/oversold lines
+            fig.add_hline(
+                y=70,
+                line_dash="dash",
+                line_color=call_color,
+                row=3,
+                col=1,
+                annotation_text="Overbought"
+            )
+            fig.add_hline(
+                y=30,
+                line_dash="dash",
+                line_color=put_color,
+                row=3,
+                col=1,
+                annotation_text="Oversold"
+            )
+
+            # Update layout with consistent styling
+            fig.update_layout(
+                template="plotly_dark",
+                title=dict(
+                    text=f"Technical Analysis for {ticker}",
+                    x=0,
+                    xanchor='left',
+                    font=dict(size=st.session_state.chart_text_size + 8)
+                ),
+                showlegend=True,
+                height=1000,
+                legend=dict(
+                    font=dict(size=st.session_state.chart_text_size)
+                )
+            )
+
+            # Update axes with consistent text sizes
+            fig.update_xaxes(
+                rangeslider_visible=False,
+                tickfont=dict(size=st.session_state.chart_text_size)
+            )
+            fig.update_yaxes(
+                title_text="Price",
+                row=1,
+                col=1,
+                tickfont=dict(size=st.session_state.chart_text_size),
+                title_font=dict(size=st.session_state.chart_text_size)
+            )
+            fig.update_yaxes(
+                title_text="GEX",
+                row=2,
+                col=1,
+                tickfont=dict(size=st.session_state.chart_text_size),
+                title_font=dict(size=st.session_state.chart_text_size)
+            )
+            fig.update_yaxes(
+                title_text="RSI",
+                range=[0, 100],
+                row=3,
+                col=1,
+                tickfont=dict(size=st.session_state.chart_text_size),
+                title_font=dict(size=st.session_state.chart_text_size)
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
     st.stop()
 
 # -----------------------------------------
