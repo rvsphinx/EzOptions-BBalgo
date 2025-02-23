@@ -44,6 +44,8 @@ if 'call_color' not in st.session_state:
     st.session_state.call_color = '#00FF00'  # Default green for calls
 if 'put_color' not in st.session_state:
     st.session_state.put_color = '#FF0000'   # Default red for puts
+if 'vix_color' not in st.session_state:
+    st.session_state.vix_color = '#800080'   # Default purple for VIX
 
 # -------------------------------
 # Helper Functions
@@ -893,12 +895,17 @@ def chart_settings():
         if 'show_vix_overlay' not in st.session_state:
             st.session_state.show_vix_overlay = False
         
+        # Group VIX settings together
+        st.write("VIX Settings:")
         show_vix = st.checkbox("VIX Overlay", value=st.session_state.show_vix_overlay)
+        if show_vix:
+            new_vix_color = st.color_picker("VIX Color", st.session_state.vix_color)
+            if new_vix_color != st.session_state.vix_color:
+                st.session_state.vix_color = new_vix_color
         
         if show_vix != st.session_state.show_vix_overlay:
             st.session_state.show_vix_overlay = show_vix
 
-        # Add text size control
         if 'chart_text_size' not in st.session_state:
             st.session_state.chart_text_size = 12  # Default text size
             
@@ -2343,7 +2350,7 @@ elif st.session_state.current_page == "Dashboard":
                                     x=vix_data.index,
                                     y=normalized_vix,
                                     name='VIX',
-                                    line=dict(color='purple'),
+                                    line=dict(color=st.session_state.vix_color),
                                     opacity=0.7
                                 ),
                                 secondary_y=False  # Changed to False to use same y-axis
@@ -2359,7 +2366,7 @@ elif st.session_state.current_page == "Dashboard":
                                 xshift=16,
                                 ax=50,
                                 ay=0,
-                                font=dict(color='purple', size=15)
+                                font=dict(color=st.session_state.vix_color, size=15)
                             )
 
                         # Only add price annotation if we have a valid price
