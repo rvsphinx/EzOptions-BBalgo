@@ -1,68 +1,45 @@
 import subprocess
 import sys
-import os
 import logging
+import os
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def install_requirements():
     logging.info("Checking and installing requirements...")
     try:
+        # Use sys.executable to ensure we use the same Python that’s running the script
         subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "-r", "requirements.txt"])
         logging.info("Successfully installed requirements.")
     except subprocess.CalledProcessError as e:
         logging.error(f"Error installing requirements: {e}")
+        logging.error("Please check your requirements.txt file, internet connection, and ensure pip is available.")
+        logging.error(f"Run the command manually for more details: '{sys.executable} -m pip install --upgrade -r requirements.txt'")
         sys.exit(1)
-
-def check_git():
-    try:
-        subprocess.check_call(["git", "--version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        # Verify if current directory is a git repository
-        subprocess.check_call(["git", "rev-parse", "--git-dir"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return True
-    except subprocess.CalledProcessError:
-        logging.error("Not a valid git repository. Please ensure you're in the correct directory.")
-        return False
     except FileNotFoundError:
-        logging.error("Git is not installed. Please install Git to update the project.")
-        return False
-
-def update_project():
-    if not check_git():
+        logging.error("Python or pip not found. Ensure Python is installed and added to your PATH.")
         sys.exit(1)
-    
-    logging.info("Updating project...")
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            # First, try to fix any potential repository issues
-            subprocess.check_call(["git", "config", "--global", "--add", "safe.directory", os.getcwd()])
-            
-            # Attempt to reset any potential conflicts
-            subprocess.check_call(["git", "reset", "--hard", "HEAD"])
-            
-            # Pull changes
-            subprocess.check_call(["git", "pull"])
-            logging.info("Successfully updated project.")
-            return
-        except subprocess.CalledProcessError as e:
-            if attempt < max_retries - 1:
-                logging.warning(f"Update attempt {attempt + 1} failed, retrying...")
-                continue
-            logging.error(f"Error updating project (Git error {e.returncode}): {e}")
-            logging.error("Please try manually running: git config --global --add safe.directory <your_project_path>")
-            sys.exit(1)
+    except Exception as e:
+        logging.error(f"Unexpected error installing requirements: {e}")
+        sys.exit(1)
 
 def run_ezoptions():
-    logging.info("Running ezoptions.py...")
+    logging.info("Running ezoptions.py via Streamlit...")
     try:
-        subprocess.check_call(["streamlit", "run", "ezoptions.py"])
-        logging.info("Successfully ran ezoptions.py using streamlit.")
+        # Use sys.executable to ensure we use the same Python that’s running the script
+        subprocess.check_call([sys.executable, "-m", "streamlit", "run", "https://raw.githubusercontent.com/EazyDuz1t/EzOptions/refs/heads/main/ezoptions.py"])
+        logging.info("Successfully ran ezoptions.py using Streamlit.")
     except subprocess.CalledProcessError as e:
         logging.error(f"Error running ezoptions.py: {e}")
+        logging.error("Ensure Streamlit is installed and the URL is accessible. Install Streamlit with '{sys.executable} -m pip install streamlit'.")
+        sys.exit(1)
+    except FileNotFoundError:
+        logging.error("Streamlit or Python not found. Ensure Streamlit is installed with '{sys.executable} -m pip install streamlit' and Python is available.")
+        sys.exit(1)
+    except Exception as e:
+        logging.error(f"Unexpected error running ezoptions.py: {e}")
         sys.exit(1)
 
 if __name__ == "__main__":
     install_requirements()
-    update_project()
     run_ezoptions()
