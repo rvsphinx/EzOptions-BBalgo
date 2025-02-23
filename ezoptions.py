@@ -3150,15 +3150,15 @@ elif st.session_state.current_page == "Analysis":
             ])
             historical_data['Rolling GEX Avg'] = gex_padded.rolling(window=lookback).mean()[lookback:].values
 
-            # Create subplots
+            # Create subplots with independent X-axes
             fig = make_subplots(
                 rows=3, 
                 cols=1, 
-                shared_xaxes=True,
+                shared_xaxes=False,  # Changed to False for independent X-axes
                 vertical_spacing=0.1,
                 subplot_titles=(
-                    'Price with SMA and Bollinger Bands',
-                    'GEX with Rolling Average',
+                    'Price vs. Simple Moving Average and Bollinger Bands',
+                    'GEX Rolling Average',
                     'RSI'
                 )
             )
@@ -3287,11 +3287,18 @@ elif st.session_state.current_page == "Analysis":
                 )
             )
 
-            # Update axes with consistent text sizes
-            fig.update_xaxes(
-                rangeslider_visible=False,
-                tickfont=dict(size=st.session_state.chart_text_size)
-            )
+            # Update X-axes for each subplot to show dates
+            for row in [1, 2, 3]:
+                fig.update_xaxes(
+                    showticklabels=True,  # Ensure dates are visible
+                    tickfont=dict(size=st.session_state.chart_text_size),
+                    title_text="Date",  # Optional: Add "Date" label to each X-axis
+                    title_font=dict(size=st.session_state.chart_text_size),
+                    row=row,
+                    col=1
+                )
+
+            # Update Y-axes with consistent styling
             fig.update_yaxes(
                 title_text="Price",
                 row=1,
