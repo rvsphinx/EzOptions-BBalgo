@@ -20,7 +20,7 @@ import numpy as np
 import pytz
 from datetime import timedelta
 
-# Add thread context management
+
 @contextmanager
 def st_thread_context():
     """Thread context management for Streamlit"""
@@ -732,14 +732,37 @@ def get_combined_intraday_data(ticker):
                 price = gspc.fast_info.get("lastPrice")
             if price is not None:
                 latest_price = round(float(price), 2)
+                # Update the last data point with current price
                 last_idx = intraday_data.index[-1]
-                intraday_data.loc[last_idx, 'Close'] = latest_price
-                intraday_data.loc[last_idx, 'Open'] = latest_price
-                intraday_data.loc[last_idx, 'High'] = max(latest_price, intraday_data.loc[last_idx, 'High'])
-                intraday_data.loc[last_idx, 'Low'] = min(latest_price, intraday_data.loc[last_idx, 'Low'])
+                new_idx = last_idx + pd.Timedelta(minutes=1)  # Add 1 minute to ensure it shows as latest
+                new_row = pd.DataFrame({
+                    'Open': [latest_price],
+                    'High': [latest_price],
+                    'Low': [latest_price],
+                    'Close': [latest_price],
+                    'Volume': [0]
+                }, index=[new_idx])
+                intraday_data = pd.concat([intraday_data, new_row])
         except Exception as e:
             print(f"Error fetching SPX price: {str(e)}")
             latest_price = yahoo_last_price
+    else:
+        try:
+            price = get_current_price(ticker)
+            if price is not None:
+                latest_price = round(float(price), 2)
+                last_idx = intraday_data.index[-1]
+                new_idx = last_idx + pd.Timedelta(minutes=1)
+                new_row = pd.DataFrame({
+                    'Open': [latest_price],
+                    'High': [latest_price],
+                    'Low': [latest_price],
+                    'Close': [latest_price],
+                    'Volume': [0]
+                }, index=[new_idx])
+                intraday_data = pd.concat([intraday_data, new_row])
+        except Exception as e:
+            print(f"Error updating latest price: {str(e)}")
     
     return intraday_data, latest_price, vix_data
 
@@ -1102,6 +1125,20 @@ def chart_settings():
         if chart_type != st.session_state.chart_type:
             st.session_state.chart_type = chart_type
 
+         
+        if 'gex_type' not in st.session_state:
+            st.session_state.gex_type = 'Net'  # Default to Net GEX
+        
+        gex_type = st.selectbox(
+            "Gamma Exposure Type:",
+            options=['Net', 'Absolute'],
+            index=['Net', 'Absolute'].index(st.session_state.gex_type)
+        )
+
+        # Update session state when GEX type changes
+        if gex_type != st.session_state.gex_type:
+            st.session_state.gex_type = gex_type
+
         # Add refresh rate control before chart type
         if 'refresh_rate' not in st.session_state:
             st.session_state.refresh_rate = 10  # Default refresh rate
@@ -1120,20 +1157,6 @@ def chart_settings():
             st.session_state.refresh_rate = float(new_refresh_rate)
             st.cache_data.clear()
             st.rerun()
-
-        # Add GEX Type selector after chart type
-        if 'gex_type' not in st.session_state:
-            st.session_state.gex_type = 'Net'  # Default to Net GEX
-        
-        gex_type = st.selectbox(
-            "Gamma Exposure Type:",
-            options=['Net', 'Absolute'],
-            index=['Net', 'Absolute'].index(st.session_state.gex_type)
-        )
-
-        # Update session state when GEX type changes
-        if gex_type != st.session_state.gex_type:
-            st.session_state.gex_type = gex_type
 
 # Call the regular function instead of the fragment
 chart_settings()
@@ -2655,7 +2678,8 @@ if st.session_state.current_page == "Dashboard":
                                         close=intraday_data['Close'],
                                         name="Price",
                                         increasing=dict(line=dict(color=st.session_state.call_color), fillcolor='rgba(0,0,0,0)'),
-                                        decreasing=dict(line=dict(color=st.session_state.put_color), fillcolor='rgba(0,0,0,0)')
+                                        decreasing=dict(line=dict(color=st.session_state.put_color), fillcolor='rgba(0,0,0,0)'),
+                                        showlegend=False
                                     ),
                                     secondary_y=False
                                 )
@@ -2671,7 +2695,8 @@ if st.session_state.current_page == "Dashboard":
                                         increasing_line_color=st.session_state.call_color,
                                         decreasing_line_color=st.session_state.put_color,
                                         increasing_fillcolor=st.session_state.call_color,
-                                        decreasing_fillcolor=st.session_state.put_color
+                                        decreasing_fillcolor=st.session_state.put_color,
+                                        showlegend=False
                                     ),
                                     secondary_y=False
                                 )
@@ -2681,7 +2706,8 @@ if st.session_state.current_page == "Dashboard":
                                     x=intraday_data.index,
                                     y=intraday_data['Close'],
                                     name="Price",
-                                    line=dict(color='gold')
+                                    line=dict(color='gold'),
+                                    showlegend=False
                                 ),
                                 secondary_y=False
                             )
@@ -2716,7 +2742,7 @@ if st.session_state.current_page == "Dashboard":
                                         name='VIX',
                                         line=dict(color=st.session_state.vix_color, width=2),
                                         opacity=0.9,
-                                        showlegend=True
+                                        showlegend=False
                                     ),
                                     secondary_y=False
                                 )
@@ -2817,7 +2843,7 @@ if st.session_state.current_page == "Dashboard":
                                 showgrid=True,
                                 zeroline=False
                             ),
-                            legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
+                            showlegend=False  # Remove legend
                         )
 
 
