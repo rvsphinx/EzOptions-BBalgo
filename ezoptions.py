@@ -429,6 +429,30 @@ def create_donut_chart(call_volume, put_volume):
     return fig
 
 # Greek Calculations
+@st.cache_data(ttl=3600)  # Cache for 1 hour
+def get_risk_free_rate():
+    """Fetch the current risk-free rate from the 3-month Treasury Bill yield with caching."""
+    try:
+        # Get current price for the 3-month Treasury Bill
+        irx_rate = get_current_price("^IRX")
+        
+        if irx_rate is not None:
+            # Convert percentage to decimal (e.g., 5.2% to 0.052)
+            risk_free_rate = irx_rate / 100
+        else:
+            # Fallback to a default value if price fetch fails
+            risk_free_rate = 0.02  # 2% as fallback
+            print("Using fallback risk-free rate of 2%")
+            
+        return risk_free_rate
+    except Exception as e:
+        print(f"Error fetching risk-free rate: {e}")
+        return 0.02  # 2% as fallback
+
+# Initialize risk-free rate in session state if not already present
+if 'risk_free_rate' not in st.session_state:
+    st.session_state.risk_free_rate = get_risk_free_rate()
+
 def calculate_greeks(flag, S, K, t, sigma):
     """
     Calculate delta, gamma and vanna for an option.
@@ -438,15 +462,17 @@ def calculate_greeks(flag, S, K, t, sigma):
     try:
         # Add a small offset to prevent division by zero
         t = max(t, 1/1440)  # Minimum 1 minute expressed in years
-        d1 = (log(S / K) + (0.5 * sigma**2) * t) / (sigma * sqrt(t))
+        r = st.session_state.risk_free_rate  # Use cached rate from session state
+        
+        d1 = (log(S / K) + (r + 0.5 * sigma**2) * t) / (sigma * sqrt(t))
         d2 = d1 - sigma * sqrt(t)
         
-        # These are correct from py_vollib
-        delta_val = bs_delta(flag, S, K, t, 0, sigma)
-        gamma_val = bs_gamma(flag, S, K, t, 0, sigma)
-        vega_val = bs_vega(flag, S, K, t, 0, sigma)
+        # Update py_vollib calls to use the risk-free rate
+        delta_val = bs_delta(flag, S, K, t, r, sigma)
+        gamma_val = bs_gamma(flag, S, K, t, r, sigma)
+        vega_val = bs_vega(flag, S, K, t, r, sigma)
         
-        # Correct vanna calculation
+        # Correct vanna calculation with risk-free rate
         vanna_val = -norm.pdf(d1) * d2 / sigma
         
         return delta_val, gamma_val, vanna_val
@@ -460,16 +486,18 @@ def calculate_charm(flag, S, K, t, sigma):
     """
     try:
         t = max(t, 1/1440)
-        d1 = (log(S / K) + (0.5 * sigma**2) * t) / (sigma * sqrt(t))
+        r = st.session_state.risk_free_rate  # Use cached rate from session state
+        
+        d1 = (log(S / K) + (r + 0.5 * sigma**2) * t) / (sigma * sqrt(t))
         d2 = d1 - sigma * sqrt(t)
         
         norm_d1 = norm.pdf(d1)
         
-        # Correct charm formula
+        # Correct charm formula with risk-free rate
         if flag == 'c':
-            charm = -norm_d1 * (2*(0.5*sigma**2)*t - d2*sigma*sqrt(t)) / (2*t*sigma*sqrt(t))
+            charm = -norm_d1 * (2*(r + 0.5*sigma**2)*t - d2*sigma*sqrt(t)) / (2*t*sigma*sqrt(t))
         else:  # put
-            charm = -norm_d1 * (2*(0.5*sigma**2)*t - d2*sigma*sqrt(t)) / (2*t*sigma*sqrt(t))
+            charm = -norm_d1 * (2*(r + 0.5*sigma**2)*t - d2*sigma*sqrt(t)) / (2*t*sigma*sqrt(t))
             charm = -charm  # Negative for puts
         
         return charm
@@ -483,10 +511,12 @@ def calculate_speed(flag, S, K, t, sigma):
     """
     try:
         t = max(t, 1/1440)
-        d1 = (log(S / K) + (0.5 * sigma**2) * t) / (sigma * sqrt(t))
+        r = st.session_state.risk_free_rate  # Use cached rate from session state
         
-        # Correct speed formula
-        gamma = bs_gamma(flag, S, K, t, 0, sigma)
+        d1 = (log(S / K) + (r + 0.5 * sigma**2) * t) / (sigma * sqrt(t))
+        
+        # Correct speed formula with risk-free rate
+        gamma = bs_gamma(flag, S, K, t, r, sigma)
         speed = -gamma * (d1/(sigma * sqrt(t)) + 1) / S
         
         return speed
@@ -500,11 +530,13 @@ def calculate_vomma(flag, S, K, t, sigma):
     """
     try:
         t = max(t, 1/1440)
-        d1 = (log(S / K) + (0.5 * sigma**2) * t) / (sigma * sqrt(t))
+        r = st.session_state.risk_free_rate  # Use cached rate from session state
+        
+        d1 = (log(S / K) + (r + 0.5 * sigma**2) * t) / (sigma * sqrt(t))
         d2 = d1 - sigma * sqrt(t)
         
-        # Correct vomma formula
-        vega = bs_vega(flag, S, K, t, 0, sigma)
+        # Correct vomma formula with risk-free rate
+        vega = bs_vega(flag, S, K, t, r, sigma)
         vomma = vega * (d1 * d2) / sigma
         
         return vomma
@@ -828,7 +860,7 @@ def save_ticker(ticker):
 
 st.sidebar.title("Navigation")
 pages = ["Dashboard", "Volume Ratio", "OI & Volume", "Gamma Exposure", "Delta Exposure", 
-          "Vanna Exposure", "Charm Exposure", "Speed Exposure", "Vomma Exposure", "Max Pain", "GEX Surface", "IV Surface",
+          "Vanna Exposure", "Charm Exposure", "Speed Exposure", "Vomma Exposure", "Delta-Adjusted Value Index", "Max Pain", "GEX Surface", "IV Surface",
           "Analysis", "Calculated Greeks"]
 
 # Track the previous page in session state
@@ -1554,6 +1586,215 @@ def get_nearest_expiry(available_dates):
         return None
     
     return min(future_dates).strftime('%Y-%m-%d')
+
+def create_davi_chart(calls, puts, S):
+    """Create Delta-Adjusted Value Index chart that matches other exposure charts style"""
+    # Get colors from session state
+    call_color = st.session_state.call_color
+    put_color = st.session_state.put_color
+
+    # Calculate DAVI for calls and puts with filtering
+    # Only keep non-zero values
+    calls_df = calls.copy()
+    puts_df = puts.copy()
+    
+    calls_df['DAVI'] = (calls_df['volume'] + calls_df['openInterest']) * calls_df['lastPrice'] * calls_df['calc_delta']
+    calls_df = calls_df[calls_df['DAVI'] != 0][['strike', 'DAVI']].copy()
+    calls_df['OptionType'] = 'Call'
+
+    puts_df['DAVI'] = (puts_df['volume'] + puts_df['openInterest']) * puts_df['lastPrice'] * puts_df['calc_delta']
+    puts_df = puts_df[puts_df['DAVI'] != 0][['strike', 'DAVI']].copy()
+    puts_df['OptionType'] = 'Put'
+
+    # Calculate strike range around current price
+    min_strike = S - st.session_state.strike_range
+    max_strike = S + st.session_state.strike_range
+    
+    # Filter data based on strike range
+    calls_df = calls_df[(calls_df['strike'] >= min_strike) & (calls_df['strike'] <= max_strike)]
+    puts_df = puts_df[(puts_df['strike'] >= min_strike) & (puts_df['strike'] <= max_strike)]
+
+    # Filter the original dataframes for net exposure calculation
+    calls_filtered = calls[(calls['strike'] >= min_strike) & (calls['strike'] <= max_strike)]
+    puts_filtered = puts[(puts['strike'] >= min_strike) & (puts['strike'] <= max_strike)]
+
+    # Calculate Net DAVI
+    net_davi = pd.Series(0, index=sorted(set(calls_df['strike']) | set(puts_df['strike'])))
+    if not calls_df.empty:
+        net_davi = net_davi.add(calls_df.groupby('strike')['DAVI'].sum(), fill_value=0)
+    if not puts_df.empty:
+        net_davi = net_davi.add(puts_df.groupby('strike')['DAVI'].sum(), fill_value=0)
+
+    # Calculate totals for title
+    total_call_davi = calls_df['DAVI'].sum()
+    total_put_davi = puts_df['DAVI'].sum()
+
+    # Create title with totals
+    title_with_totals = (
+        f"Delta-Adjusted Value Index by Strike     "
+        f"<span style='color: {call_color}'>{total_call_davi:.0f}</span> | "
+        f"<span style='color: {put_color}'>{total_put_davi:.0f}</span>"
+    )
+
+    fig = go.Figure()
+
+    # Add calls if enabled
+    if st.session_state.show_calls:
+        if st.session_state.chart_type == 'Bar':
+            fig.add_trace(go.Bar(
+                x=calls_df['strike'],
+                y=calls_df['DAVI'],
+                name='Call',
+                marker_color=call_color
+            ))
+        elif st.session_state.chart_type == 'Scatter':
+            fig.add_trace(go.Scatter(
+                x=calls_df['strike'],
+                y=calls_df['DAVI'],
+                mode='markers',
+                name='Call',
+                marker=dict(color=call_color)
+            ))
+        elif st.session_state.chart_type == 'Line':
+            fig.add_trace(go.Scatter(
+                x=calls_df['strike'],
+                y=calls_df['DAVI'],
+                mode='lines',
+                name='Call',
+                line=dict(color=call_color)
+            ))
+        elif st.session_state.chart_type == 'Area':
+            fig.add_trace(go.Scatter(
+                x=calls_df['strike'],
+                y=calls_df['DAVI'],
+                fill='tozeroy',
+                name='Call',
+                line=dict(color=call_color, width=0.5),
+                fillcolor=call_color
+            ))
+
+    # Add puts if enabled
+    if st.session_state.show_puts:
+        if st.session_state.chart_type == 'Bar':
+            fig.add_trace(go.Bar(
+                x=puts_df['strike'],
+                y=puts_df['DAVI'],
+                name='Put',
+                marker_color=put_color
+            ))
+        elif st.session_state.chart_type == 'Scatter':
+            fig.add_trace(go.Scatter(
+                x=puts_df['strike'],
+                y=puts_df['DAVI'],
+                mode='markers',
+                name='Put',
+                marker=dict(color=put_color)
+            ))
+        elif st.session_state.chart_type == 'Line':
+            fig.add_trace(go.Scatter(
+                x=puts_df['strike'],
+                y=puts_df['DAVI'],
+                mode='lines',
+                name='Put',
+                line=dict(color=put_color)
+            ))
+        elif st.session_state.chart_type == 'Area':
+            fig.add_trace(go.Scatter(
+                x=puts_df['strike'],
+                y=puts_df['DAVI'],
+                fill='tozeroy',
+                name='Put',
+                line=dict(color=put_color, width=0.5),
+                fillcolor=put_color
+            ))
+
+    # Add Net if enabled
+    if st.session_state.show_net and not net_davi.empty:
+        if st.session_state.chart_type == 'Bar':
+            fig.add_trace(go.Bar(
+                x=net_davi.index,
+                y=net_davi.values,
+                name='Net',
+                marker_color=[call_color if val >= 0 else put_color for val in net_davi.values]
+            ))
+        elif st.session_state.chart_type in ['Scatter', 'Line']:
+            positive_mask = net_davi.values >= 0
+            if any(positive_mask):
+                fig.add_trace(go.Scatter(
+                    x=net_davi.index[positive_mask],
+                    y=net_davi.values[positive_mask],
+                    mode='markers' if st.session_state.chart_type == 'Scatter' else 'lines',
+                    name='Net (Positive)',
+                    marker=dict(color=call_color) if st.session_state.chart_type == 'Scatter' else None,
+                    line=dict(color=call_color) if st.session_state.chart_type == 'Line' else None
+                ))
+            if any(~positive_mask):
+                fig.add_trace(go.Scatter(
+                    x=net_davi.index[~positive_mask],
+                    y=net_davi.values[~positive_mask],
+                    mode='markers' if st.session_state.chart_type == 'Scatter' else 'lines',
+                    name='Net (Negative)',
+                    marker=dict(color=put_color) if st.session_state.chart_type == 'Scatter' else None,
+                    line=dict(color=put_color) if st.session_state.chart_type == 'Line' else None
+                ))
+        elif st.session_state.chart_type == 'Area':
+            positive_mask = net_davi.values >= 0
+            if any(positive_mask):
+                fig.add_trace(go.Scatter(
+                    x=net_davi.index[positive_mask],
+                    y=net_davi.values[positive_mask],
+                    fill='tozeroy',
+                    name='Net (Positive)',
+                    line=dict(color=call_color, width=0.5),
+                    fillcolor=call_color
+                ))
+            if any(~positive_mask):
+                fig.add_trace(go.Scatter(
+                    x=net_davi.index[~positive_mask],
+                    y=net_davi.values[~positive_mask],
+                    fill='tozeroy',
+                    name='Net (Negative)',
+                    line=dict(color=put_color, width=0.5),
+                    fillcolor=put_color
+                ))
+
+    # Add current price line
+    fig = add_current_price_line(fig, S)
+
+    # Update layout
+    padding = st.session_state.strike_range * 0.1
+    fig.update_layout(
+        title=dict(
+            text=title_with_totals,
+            x=0,
+            xanchor='left',
+            font=dict(size=st.session_state.chart_text_size + 8)
+        ),
+        xaxis_title=dict(
+            text='Strike Price',
+            font=dict(size=st.session_state.chart_text_size)
+        ),
+        yaxis_title=dict(
+            text='DAVI',
+            font=dict(size=st.session_state.chart_text_size)
+        ),
+        legend=dict(
+            font=dict(size=st.session_state.chart_text_size)
+        ),
+        barmode='group',
+        hovermode='x unified',
+        xaxis=dict(
+            range=[min_strike - padding, max_strike + padding],
+            tickmode='linear',
+            dtick=math.ceil(st.session_state.strike_range / 10),
+            tickfont=dict(size=st.session_state.chart_text_size)
+        ),
+        yaxis=dict(
+            tickfont=dict(size=st.session_state.chart_text_size)
+        )
+    )
+
+    return fig
 
 if st.session_state.current_page == "OI & Volume":
     main_container = st.container()
@@ -2509,7 +2750,8 @@ elif st.session_state.current_page == "Dashboard":
                         "Speed Exposure", 
                         "Vomma Exposure", 
                         "Volume Ratio",
-                        "Max Pain"  
+                        "Max Pain",
+                        "Delta-Adjusted Value Index" 
                     ]
                     default_charts = [
                          "Intraday Price",
@@ -2572,6 +2814,9 @@ elif st.session_state.current_page == "Dashboard":
                         supplemental_charts.append(fig_volume_ratio)
                     if "Max Pain" in selected_charts:
                         supplemental_charts.append(fig_max_pain)
+                    if "Delta-Adjusted Value Index" in selected_charts:
+                        supplemental_charts.append(create_davi_chart(calls, puts, S))
+
                     
                     # Display supplemental charts in rows of 2
                     for i in range(0, len(supplemental_charts), 2):
@@ -3331,6 +3576,58 @@ elif st.session_state.current_page == "Analysis":
 
             st.plotly_chart(fig, use_container_width=True)
     st.stop()
+
+elif st.session_state.current_page == "Delta-Adjusted Value Index":
+    main_container = st.container()
+    with main_container:
+        st.empty()
+        col1, col2 = st.columns([0.94, 0.06])
+        with col1:
+            user_ticker = st.text_input("Enter Stock Ticker (e.g., SPY, TSLA, SPX, NDX):", saved_ticker, key="davi_ticker")
+        with col2:
+            st.write("")
+            st.write("")
+            if st.button("🔄", key="refresh_button_davi"):
+                st.cache_data.clear()
+                st.rerun()
+        
+        ticker = format_ticker(user_ticker)
+        
+        if ticker != saved_ticker:
+            st.cache_data.clear()
+            save_ticker(ticker)
+        
+        if ticker:
+            # Fetch price once
+            S = get_current_price(ticker)
+            if S is None:
+                st.error("Could not fetch current price.")
+                st.stop()
+
+            stock = yf.Ticker(ticker)
+            available_dates = stock.options
+            if not available_dates:
+                st.warning("No options data available for this ticker.")
+            else:
+                selected_expiry_dates, selector_container = expiry_selector_fragment(st.session_state.current_page, available_dates)
+                st.session_state.expiry_selector_container = selector_container
+                
+                if not selected_expiry_dates:
+                    st.warning("Please select at least one expiration date.")
+                    st.stop()
+                
+                all_calls, all_puts = fetch_and_process_multiple_dates(
+                    ticker,
+                    selected_expiry_dates,
+                    lambda t, d: compute_greeks_and_charts(t, d, "davi", S)[:2]
+                )
+                
+                if all_calls.empty and all_puts.empty:
+                    st.warning("No options data available for the selected dates.")
+                    st.stop()
+
+                fig = create_davi_chart(all_calls, all_puts, S)
+                st.plotly_chart(fig, use_container_width=True)
 
 # -----------------------------------------
 # Auto-refresh
