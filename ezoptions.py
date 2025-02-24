@@ -17,6 +17,8 @@ import threading
 from contextlib import contextmanager
 from scipy.interpolate import griddata
 import numpy as np
+import pytz
+from datetime import timedelta
 
 # Add thread context management
 @contextmanager
@@ -684,10 +686,12 @@ def get_combined_intraday_data(ticker):
     
     # Filter for market hours (9:30 AM to 4:00 PM ET)
     if not intraday_data.empty:
-        intraday_data.index = intraday_data.index.tz_localize(None)
+        # Convert timezone to ET
+        eastern = pytz.timezone('US/Eastern')
+        intraday_data.index = intraday_data.index.tz_convert(eastern)
         market_start = pd.Timestamp(intraday_data.index[0].date()).replace(hour=9, minute=30)
         market_end = pd.Timestamp(intraday_data.index[0].date()).replace(hour=16, minute=0)
-        intraday_data = intraday_data.between_time('9:30', '16:00')
+        intraday_data = intraday_data.between_time('09:30', '16:00')
     
     if intraday_data.empty:
         return None, None, None
@@ -695,11 +699,25 @@ def get_combined_intraday_data(ticker):
     # Get VIX data if overlay is enabled
     vix_data = None
     if st.session_state.show_vix_overlay:
-        vix = yf.Ticker('^VIX')
-        vix_intraday = vix.history(period="1d", interval="1m")
-        if not vix_intraday.empty:
-            vix_intraday.index = vix_intraday.index.tz_localize(None)
-            vix_data = vix_intraday.between_time('9:30', '16:00')
+        try:
+            vix = yf.Ticker('^VIX')
+            vix_intraday = vix.history(period="1d", interval="1m")
+            if not vix_intraday.empty:
+                # Convert timezone to ET and filter for market hours
+                vix_intraday.index = vix_intraday.index.tz_convert(eastern)
+                vix_data = vix_intraday.between_time('09:30', '16:00')
+                
+                # Align VIX data with stock data timeframes
+                if not intraday_data.empty and not vix_data.empty:
+                    common_times = intraday_data.index.intersection(vix_data.index)
+                    if len(common_times) > 0:
+                        intraday_data = intraday_data.loc[common_times]
+                        vix_data = vix_data.loc[common_times]
+                    else:
+                        vix_data = None
+        except Exception as e:
+            print(f"Error fetching VIX data: {e}")
+            vix_data = None
     
     intraday_data = intraday_data.copy()
     yahoo_last_price = intraday_data['Close'].iloc[-1] if not intraday_data.empty else None
@@ -1874,6 +1892,32 @@ def create_davi_chart(calls, puts, S):
 
     return fig
 
+def check_market_status():
+    """Check if we're in pre-market, market hours, or post-market"""
+    pacific = datetime.now(tz=pytz.timezone('US/Pacific'))
+    market_message = None
+    
+    # Check if it's between 10 PM PST and 7 AM PST
+    if pacific.hour >= 22 or pacific.hour < 7:
+        next_update = pacific.replace(hour=7, minute=0) if pacific.hour < 7 else \
+                     (pacific + timedelta(days=1)).replace(hour=7, minute=30)
+        time_until = next_update - pacific
+        hours, remainder = divmod(time_until.seconds, 3600)
+        minutes, _ = divmod(remainder, 60)
+        market_message = f"""
+        ⚠️ **WAIT FOR NEW DATA**
+        - Current time (PST): {pacific.strftime('%I:%M %p')}
+        - New data will be available at 7:00 AM PST
+        - Time until new data: {hours}h {minutes}m
+        """
+    return market_message
+
+# Add at the start of each page's container
+if st.session_state.current_page:
+    market_status = check_market_status()
+    if market_status:
+        st.warning(market_status)
+
 if st.session_state.current_page == "OI & Volume":
     main_container = st.container()
     with main_container:
@@ -2536,7 +2580,7 @@ elif st.session_state.current_page == "Calculated Greeks":
                     st.warning("Please select an expiration date to view the calculations.")
                     st.stop()
 
-elif st.session_state.current_page == "Dashboard":
+if st.session_state.current_page == "Dashboard":
     main_container = st.container()
     with main_container:
         st.empty()
@@ -2582,7 +2626,6 @@ elif st.session_state.current_page == "Dashboard":
                     if calls is None or puts is None:
                         st.stop()
                         
-
                     fig_gamma = create_exposure_bar_chart(calls, puts, "GEX", "Gamma Exposure by Strike", S)
                     fig_vanna = create_exposure_bar_chart(calls, puts, "VEX", "Vanna Exposure by Strike", S)
                     fig_delta = create_exposure_bar_chart(calls, puts, "DEX", "Delta Exposure by Strike", S)
@@ -2599,10 +2642,9 @@ elif st.session_state.current_page == "Dashboard":
                         fig_intraday = make_subplots(specs=[[{"secondary_y": True}]])
                         fig_intraday.layout.shapes = []
                         fig_intraday.layout.annotations = []
-                        
+
                         # Add either candlestick or line trace based on selection
                         if st.session_state.intraday_chart_type == 'Candlestick':
-                            # Set colors based on candlestick type
                             if st.session_state.candlestick_type == 'Hollow':
                                 fig_intraday.add_trace(
                                     go.Candlestick(
@@ -2612,14 +2654,8 @@ elif st.session_state.current_page == "Dashboard":
                                         low=intraday_data['Low'],
                                         close=intraday_data['Close'],
                                         name="Price",
-                                        increasing=dict(
-                                            line=dict(color=st.session_state.call_color),
-                                            fillcolor='rgba(0,0,0,0)'
-                                        ),
-                                        decreasing=dict(
-                                            line=dict(color=st.session_state.put_color),
-                                            fillcolor='rgba(0,0,0,0)'
-                                        )
+                                        increasing=dict(line=dict(color=st.session_state.call_color), fillcolor='rgba(0,0,0,0)'),
+                                        decreasing=dict(line=dict(color=st.session_state.put_color), fillcolor='rgba(0,0,0,0)')
                                     ),
                                     secondary_y=False
                                 )
@@ -2639,7 +2675,7 @@ elif st.session_state.current_page == "Dashboard":
                                     ),
                                     secondary_y=False
                                 )
-                        else:  # Line chart remains the same
+                        else:  # Line chart
                             fig_intraday.add_trace(
                                 go.Scatter(
                                     x=intraday_data.index,
@@ -2649,46 +2685,59 @@ elif st.session_state.current_page == "Dashboard":
                                 ),
                                 secondary_y=False
                             )
-                        
+
+                        # Calculate base y-axis range from price data
+                        price_min = intraday_data['Low'].min()
+                        price_max = intraday_data['High'].max()
+                        price_range = price_max - price_min
+                        padding = price_range * 0.1  # 10% padding
+                        y_min = price_min - padding
+                        y_max = price_max + padding
+
                         # Add VIX overlay if enabled
                         if st.session_state.show_vix_overlay and vix_data is not None and not vix_data.empty:
-                            # Normalize VIX data to match price scale
-                            price_min = intraday_data['Low'].min()
-                            price_max = intraday_data['High'].max()
-                            price_range = price_max - price_min
-                            
                             vix_min = vix_data['Close'].min()
                             vix_max = vix_data['Close'].max()
                             vix_range = vix_max - vix_min
-                            
-                            # Scale VIX values to match price range
-                            normalized_vix = price_min + ((vix_data['Close'] - vix_min) * price_range / vix_range)
-                            
-                            fig_intraday.add_trace(
-                                go.Scatter(
-                                    x=vix_data.index,
-                                    y=normalized_vix,
-                                    name='VIX',
-                                    line=dict(color=st.session_state.vix_color),
-                                    opacity=0.7
-                                ),
-                                secondary_y=False  # Changed to False to use same y-axis
-                            )
-                            
-                            # Add VIX value annotations on the right side
-                            fig_intraday.add_annotation(
-                                x=vix_data.index[-1],
-                                y=normalized_vix.iloc[-1],
-                                text=f"{vix_data['Close'].iloc[-1]:.2f}",
-                                showarrow=False,
-                                arrowhead=1,
-                                xshift=16,
-                                ax=50,
-                                ay=0,
-                                font=dict(color=st.session_state.vix_color, size=15)
-                            )
 
-                        # Only add price annotation if we have a valid price
+                            if vix_range == 0:
+                                st.warning("VIX data has no range, overlay disabled")
+                            else:
+                                # Normalize VIX to fit within 50% of price range, centered
+                                target_vix_range = price_range * 0.5
+                                vix_midpoint = (price_max + price_min) / 2
+                                normalized_vix = vix_midpoint + (((vix_data['Close'] - vix_min) / vix_range - 0.5) * target_vix_range)
+
+
+                                fig_intraday.add_trace(
+                                    go.Scatter(
+                                        x=vix_data.index,
+                                        y=normalized_vix,
+                                        name='VIX',
+                                        line=dict(color=st.session_state.vix_color, width=2),
+                                        opacity=0.9,
+                                        showlegend=True
+                                    ),
+                                    secondary_y=False
+                                )
+
+                                fig_intraday.add_annotation(
+                                    x=vix_data.index[-1],
+                                    y=normalized_vix.iloc[-1],
+                                    text=f"{vix_data['Close'].iloc[-1]:.2f}",
+                                    showarrow=False,
+                                    xshift=16,
+                                    font=dict(color=st.session_state.vix_color, size=15)
+                                )
+
+                                # Adjust y-axis to include VIX
+                                y_min = min(y_min, normalized_vix.min() - padding)
+                                y_max = max(y_max, normalized_vix.max() + padding)
+
+                        elif st.session_state.show_vix_overlay:
+                            st.warning("VIX overlay enabled but no VIX data available")
+
+                        # Price annotation
                         if current_price is not None:
                             fig_intraday.add_annotation(
                                 x=intraday_data.index[-1],
@@ -2700,149 +2749,94 @@ elif st.session_state.current_page == "Dashboard":
                                 text=f"{current_price:,.2f}",
                                 font=dict(color='yellow', size=15)
                             )
-                            
-                            # Calculate y-axis range with less aggressive padding
-                            market_open_price = intraday_data['Open'].iloc[0]
-                            price_range = max(intraday_data['High'].max(), current_price) - min(intraday_data['Low'].min(), current_price)
-                            padding = price_range * 0.05  # Use 5% padding instead
-                            
-                            y_min = min(intraday_data['Low'].min(), current_price, market_open_price) - padding
-                            y_max = max(intraday_data['High'].max(), current_price, market_open_price) + padding
-                            
-                            # Ensure there's always some minimum range to prevent crushing
-                            if abs(y_max - y_min) < (current_price * 0.001):  # Minimum 0.1% range
-                                center = (y_max + y_min) / 2
-                                y_min = center * 0.999
-                                y_max = center * 1.001
-                            
-                            fig_intraday.update_yaxes(range=[y_min, y_max])
+                            y_min = min(y_min, current_price - padding)
+                            y_max = max(y_max, current_price + padding)
 
-                        # Process options data
+                        # Process options data (GEX levels)
                         calls['OptionType'] = 'Call'
                         puts['OptionType'] = 'Put'
-                        
-                        # Combine and filter GEX data
                         options_df = pd.concat([calls, puts]).dropna(subset=['GEX'])
                         added_strikes = set()
-                        
-                        if options_df.empty:
-                            st.warning("Intraday Data will display near market open.")
-                        else:
-                            # Get all GEX levels sorted by absolute value and distance from current price
+
+                        if not options_df.empty:
                             top5 = options_df.nlargest(5, 'GEX')[['strike', 'GEX', 'OptionType']]
-                            
-                            # Sort by distance from current price for zoom calculation
                             top5['distance'] = abs(top5['strike'] - current_price)
                             nearest_3 = top5.nsmallest(3, 'distance')
-                            
-                            # Find max GEX value for color scaling using all top 5
                             max_gex = abs(top5['GEX']).max()
-                            
-                            # Add all GEX levels
+
                             for row in top5.itertuples():
-                                if row.strike not in added_strikes:
-                                    # Ensure intensity is not NaN and within valid range
-                                    if not pd.isna(row.GEX) and row.GEX != 0:
-                                        intensity = 0.4 + (min(abs(row.GEX) / max_gex, 1.0) * 0.6)
+                                if row.strike not in added_strikes and not pd.isna(row.GEX) and row.GEX != 0:
+                                    intensity = 0.4 + (min(abs(row.GEX) / max_gex, 1.0) * 0.6)
+                                    if not pd.isna(intensity) and 0 <= intensity <= 1:
+                                        base_color = st.session_state.call_color if row.OptionType == 'Call' else st.session_state.put_color
+                                        rgb = tuple(int(base_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
+                                        color = f'rgba({rgb[0]}, {rgb[1]}, {rgb[2]}, {intensity})'
                                         
-                                        if not pd.isna(intensity) and 0 <= intensity <= 1:
-                                            if row.OptionType == 'Call':
-                                                base_color = st.session_state.call_color
-                                            else:
-                                                base_color = st.session_state.put_color
-                                                
-                                            rgb = tuple(int(base_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
-                                            color = f'rgba({rgb[0]}, {rgb[1]}, {rgb[2]}, {intensity})'
-                                            
-                                            fig_intraday.add_shape(
-                                                type='line',
-                                                x0=intraday_data.index[0],
-                                                x1=intraday_data.index[-1],
-                                                y0=row.strike,
-                                                y1=row.strike,
-                                                line=dict(color=color, width=2),
-                                                xref='x',
-                                                yref='y',
-                                                layer='below'
-                                            )
-                                            
-                                            fig_intraday.add_annotation(
-                                                x=intraday_data.index[-1],
-                                                y=row.strike,
-                                                xref='x',
-                                                yref='y',
-                                                showarrow=True,
-                                                arrowhead=1,
-                                                text=f"GEX {row.GEX:,.0f}",
-                                                font=dict(color=color),
-                                                arrowcolor=color
-                                            )
-                                            
-                                            added_strikes.add(row.strike)
-                            
-                            # Set y-axis range based on price data and nearest 3 GEX levels
-                            y_min = min(
-                                min(intraday_data['Low'].min(), current_price),
-                                nearest_3['strike'].min()
-                            ) * 0.9995
-                            
-                            y_max = max(
-                                max(intraday_data['High'].max(), current_price),
-                                nearest_3['strike'].max()
-                            ) * 1.0005
+                                        fig_intraday.add_shape(
+                                            type='line',
+                                            x0=intraday_data.index[0],
+                                            x1=intraday_data.index[-1],
+                                            y0=row.strike,
+                                            y1=row.strike,
+                                            line=dict(color=color, width=2),
+                                            xref='x',
+                                            yref='y',
+                                            layer='below'
+                                        )
+                                        fig_intraday.add_annotation(
+                                            x=intraday_data.index[-1],
+                                            y=row.strike,
+                                            text=f"GEX {row.GEX:,.0f}",
+                                            font=dict(color=color),
+                                            showarrow=True,
+                                            arrowcolor=color
+                                        )
+                                        added_strikes.add(row.strike)
 
-                    
-                            # Update layout with interactive features
-                            fig_intraday.update_layout(
-                                title=f"Intraday Price for {ticker}",
-                                height=600,
-                                hovermode='x unified',
-                                margin=dict(r=150, l=50),
-                                xaxis=dict(
-                                    autorange=True,
-                                    rangeslider=dict(visible=False)
-                                ),
-                                yaxis=dict(
-                                    range=[y_min, y_max],
-                                    autorange=False,
-                                    fixedrange=False
-                                )
-                            )
+                            # Include GEX strikes in y-axis range
+                            y_min = min(y_min, nearest_3['strike'].min() - padding)
+                            y_max = max(y_max, nearest_3['strike'].max() + padding)
 
-                    
-                    # Calculate volume ratio
+                        # Ensure minimum range
+                        if abs(y_max - y_min) < (current_price * 0.01):  # Minimum 1% range
+                            center = (y_max + y_min) / 2
+                            y_min = center * 0.99
+                            y_max = center * 1.01
+
+                        # Update layout
+                        fig_intraday.update_layout(
+                            title=f"Intraday Price for {ticker}",
+                            height=600,
+                            hovermode='x unified',
+                            margin=dict(r=150, l=50),
+                            xaxis=dict(autorange=True, rangeslider=dict(visible=False)),
+                            yaxis=dict(
+                                range=[y_min, y_max],
+                                autorange=False,
+                                fixedrange=False,
+                                showgrid=True,
+                                zeroline=False
+                            ),
+                            legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
+                        )
+
+
+                    # Volume ratio and other charts
                     call_volume = calls['volume'].sum()
                     put_volume = puts['volume'].sum()
                     fig_volume_ratio = create_donut_chart(call_volume, put_volume)
-                    
-                    
                     fig_max_pain = create_max_pain_chart(calls, puts, S)
                     
-                    
                     chart_options = [
-                        "Intraday Price", 
-                        "Gamma Exposure", 
-                        "Vanna Exposure", 
-                        "Delta Exposure", 
-                        "Charm Exposure", 
-                        "Speed Exposure", 
-                        "Vomma Exposure", 
-                        "Volume Ratio",
-                        "Max Pain",
-                        "Delta-Adjusted Value Index" 
+                        "Intraday Price", "Gamma Exposure", "Vanna Exposure", "Delta Exposure",
+                        "Charm Exposure", "Speed Exposure", "Vomma Exposure", "Volume Ratio",
+                        "Max Pain", "Delta-Adjusted Value Index"
                     ]
-                    default_charts = [
-                         "Intraday Price",
-                         "Gamma Exposure",
-                         "Vanna Exposure",
-                         "Delta Exposure",
-                         "Charm Exposure"
-                     ]
+                    default_charts = ["Intraday Price", "Gamma Exposure", "Vanna Exposure", "Delta Exposure", "Charm Exposure"]
                     selected_charts = st.multiselect("Select charts to display:", chart_options, default=[
-                         chart for chart in default_charts if chart in chart_options
-                     ])
+                        chart for chart in default_charts if chart in chart_options
+                    ])
 
-                    
                     if 'saved_ticker' in st.session_state and st.session_state.saved_ticker:
                         current_price = get_current_price(st.session_state.saved_ticker)
                         if current_price:
@@ -2851,56 +2845,37 @@ elif st.session_state.current_page == "Dashboard":
                             
                             if not gainers_df.empty and not losers_df.empty:
                                 market_text = (
-                                    "<span style='color: gray; font-size: 14px;'>Gainers:</span> "
-                                    + " ".join([
-                                        f"<span style='color: {st.session_state.call_color}'>"
-                                        f"{gainer['symbol']}: +{gainer['regularMarketChangePercent']:.1f}%</span> "
-                                        for _, gainer in gainers_df.head().iterrows()
-                                    ])
-                                    + " | <span style='color: gray; font-size: 14px;'>Losers:</span> "
-                                    + " ".join([
-                                        f"<span style='color: {st.session_state.put_color}'>"
-                                        f"{loser['symbol']}: {loser['regularMarketChangePercent']:.1f}%</span> "
-                                        for _, loser in losers_df.head().iterrows()
-                                    ])
+                                    "<span style='color: gray; font-size: 14px;'>Gainers:</span> " +
+                                    " ".join([f"<span style='color: {st.session_state.call_color}'>{gainer['symbol']}: +{gainer['regularMarketChangePercent']:.1f}%</span> "
+                                            for _, gainer in gainers_df.head().iterrows()]) +
+                                    " | <span style='color: gray; font-size: 14px;'>Losers:</span> " +
+                                    " ".join([f"<span style='color: {st.session_state.put_color}'>{loser['symbol']}: {loser['regularMarketChangePercent']:.1f}%</span> "
+                                            for _, loser in losers_df.head().iterrows()])
                                 )
                                 st.markdown(market_text, unsafe_allow_html=True)
                             
                             st.markdown(f"#### Current Price: ${current_price:.2f}")
                             st.markdown("---")
 
-                    
                     # Display selected charts
                     if "Intraday Price" in selected_charts:
                         st.plotly_chart(fig_intraday, use_container_width=True, key="Dashboard_intraday_chart")
                     
-                    # Create a list of selected supplemental charts
                     supplemental_charts = []
-                    if "Gamma Exposure" in selected_charts:
-                        supplemental_charts.append(fig_gamma)
-                    if "Delta Exposure" in selected_charts:
-                        supplemental_charts.append(fig_delta)
-                    if "Vanna Exposure" in selected_charts:
-                        supplemental_charts.append(fig_vanna)
-                    if "Charm Exposure" in selected_charts:
-                        supplemental_charts.append(fig_charm)
-                    if "Speed Exposure" in selected_charts:
-                        supplemental_charts.append(fig_speed)
-                    if "Vomma Exposure" in selected_charts:
-                        supplemental_charts.append(fig_vomma)
-                    if "Volume Ratio" in selected_charts:
-                        supplemental_charts.append(fig_volume_ratio)
-                    if "Max Pain" in selected_charts:
-                        supplemental_charts.append(fig_max_pain)
-                    if "Delta-Adjusted Value Index" in selected_charts:
-                        supplemental_charts.append(create_davi_chart(calls, puts, S))
-
+                    for chart, fig in [
+                        ("Gamma Exposure", fig_gamma), ("Delta Exposure", fig_delta),
+                        ("Vanna Exposure", fig_vanna), ("Charm Exposure", fig_charm),
+                        ("Speed Exposure", fig_speed), ("Vomma Exposure", fig_vomma),
+                        ("Volume Ratio", fig_volume_ratio), ("Max Pain", fig_max_pain),
+                        ("Delta-Adjusted Value Index", create_davi_chart(calls, puts, S))
+                    ]:
+                        if chart in selected_charts:
+                            supplemental_charts.append(fig)
                     
-                    # Display supplemental charts in rows of 2
                     for i in range(0, len(supplemental_charts), 2):
                         cols = st.columns(2)
                         for j, chart in enumerate(supplemental_charts[i:i+2]):
-                            if chart is not None: 
+                            if chart is not None:
                                 cols[j].plotly_chart(chart, use_container_width=True)
 
                 else:
