@@ -13,11 +13,7 @@ from py_vollib.black_scholes.greeks.analytical import vega as bs_vega
 import re
 import time
 from scipy.stats import norm
-import requests
-import json
-import base64
 import threading
-from random import randint
 from contextlib import contextmanager
 from scipy.interpolate import griddata
 import numpy as np
@@ -152,6 +148,88 @@ def get_screener_data(screener_type):
     except Exception as e:
         print(f"Error fetching screener data: {e}")
         return pd.DataFrame()
+
+def calculate_annualized_return(data, period='1y'):
+    """Calculate annualized return rate for each weekday"""
+    # Convert period to days
+    period_days = {
+        '1y': 365,
+        '6mo': 180,
+        '3mo': 90,
+        '1mo': 30,
+    }
+    days = period_days.get(period, 365)
+    
+    # Filter data for selected period using proper indexing
+    end_date = data.index.max()
+    start_date = end_date - pd.Timedelta(days=days)
+    filtered_data = data.loc[start_date:end_date].copy()
+    
+    # Calculate daily returns
+    filtered_data['Returns'] = filtered_data['Close'].pct_change()
+    
+    # Group by weekday and calculate mean return
+    weekday_returns = filtered_data.groupby(filtered_data.index.weekday)['Returns'].mean()
+    
+    # Annualize returns (252 trading days per year)
+    annualized_returns = (1 + weekday_returns) ** 252 - 1
+    
+    # Map weekday numbers to names
+    weekday_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
+    annualized_returns.index = weekday_names
+    
+    return annualized_returns * 100  # Convert to percentage
+
+def create_weekday_returns_chart(returns):
+    """Create a bar chart of weekday returns"""
+    fig = go.Figure()
+    
+    # Add bars with colors based on return value
+    for day, value in returns.items():
+        color = st.session_state.call_color if value >= 0 else st.session_state.put_color
+        fig.add_trace(go.Bar(
+            x=[day],
+            y=[value],
+            name=day,
+            marker_color=color,
+            text=[f'{value:.2f}%'],
+            textposition='outside'
+        ))
+    
+    # Calculate y-axis range with padding
+    y_values = returns.values
+    y_max = max(y_values)
+    y_min = min(y_values)
+    y_range = y_max - y_min
+    padding = y_range * 0.2  # 20% padding
+    
+    fig.update_layout(
+        title=dict(
+            text='Annualized Return Rate by Weekday',
+            x=0,
+            xanchor='left',
+            font=dict(size=st.session_state.chart_text_size + 8)
+        ),
+        xaxis_title=dict(
+            text='Weekday',
+            font=dict(size=st.session_state.chart_text_size)
+        ),
+        yaxis_title=dict(
+            text='Annualized Return (%)',
+            font=dict(size=st.session_state.chart_text_size)
+        ),
+        yaxis=dict(
+            range=[y_min - padding, y_max + padding],  # Add padding to y-axis range
+            tickfont=dict(size=st.session_state.chart_text_size)
+        ),
+        showlegend=False,
+        template="plotly_dark"
+    )
+    
+    # Update axis fonts
+    fig.update_xaxes(tickfont=dict(size=st.session_state.chart_text_size))
+    
+    return fig
 
 # -------------------------------
 # Fetch all options experations and add extract expiry
@@ -3338,8 +3416,8 @@ elif st.session_state.current_page == "Analysis":
         with col1:
             user_ticker = st.text_input("Enter Stock Ticker (e.g., SPY, TSLA, SPX, NDX):", saved_ticker, key="analysis_ticker")
         with col2:
-            st.write("")  # Add some spacing
-            st.write("")  # Add some spacing
+            st.write("")
+            st.write("")
             if st.button("🔄", key="refresh_button_analysis"):
                 st.cache_data.clear()
                 st.rerun()
@@ -3358,8 +3436,8 @@ elif st.session_state.current_page == "Analysis":
                 st.stop()
 
             stock = yf.Ticker(ticker)
-            # Fetch 6 months of historical data instead of 1 year
-            historical_data = stock.history(period="6mo", interval="1d")  # Changed from "1y" to "6mo"
+            # Fetch 1 year of historical data for maximum analysis period
+            historical_data = stock.history(period="1y", interval="1d")
             
             if historical_data.empty:
                 st.warning("No historical data available for this ticker.")
@@ -3381,6 +3459,7 @@ elif st.session_state.current_page == "Analysis":
             historical_data['Upper Band'] = historical_data['SMA'] + 2 * std_padded[lookback:].values
             historical_data['Lower Band'] = historical_data['SMA'] - 2 * std_padded[lookback:].values
 
+            # Calculate RSI
             def calculate_rsi(data, period=14):
                 # Add padding for RSI calculation
                 padding = pd.concat([data.iloc[:period].iloc[::-1], data])
@@ -3402,11 +3481,11 @@ elif st.session_state.current_page == "Analysis":
             ])
             historical_data['Rolling GEX Avg'] = gex_padded.rolling(window=lookback).mean()[lookback:].values
 
-            # Create subplots with independent X-axes
+            # Create technical analysis chart
             fig = make_subplots(
                 rows=3, 
                 cols=1, 
-                shared_xaxes=False,  # Changed to False for independent X-axes
+                shared_xaxes=False,
                 vertical_spacing=0.1,
                 subplot_titles=(
                     'Price vs. Simple Moving Average and Bollinger Bands',
@@ -3415,115 +3494,71 @@ elif st.session_state.current_page == "Analysis":
                 )
             )
 
-            # Get colors from session state
             call_color = st.session_state.call_color
             put_color = st.session_state.put_color
 
             # Price and indicators with consistent colors
             fig.add_trace(
-                go.Scatter(
-                    x=historical_data.index, 
-                    y=historical_data['Close'], 
-                    name='Price', 
-                    line=dict(color='gold')
-                ),
+                go.Scatter(x=historical_data.index, y=historical_data['Close'], 
+                          name='Price', line=dict(color='gold')),
                 row=1, col=1
             )
             fig.add_trace(
-                go.Scatter(
-                    x=historical_data.index, 
-                    y=historical_data['SMA'], 
-                    name='SMA', 
-                    line=dict(color='purple')
-                ),
+                go.Scatter(x=historical_data.index, y=historical_data['SMA'], 
+                          name='SMA', line=dict(color='purple')),
                 row=1, col=1
             )
             fig.add_trace(
-                go.Scatter(
-                    x=historical_data.index, 
-                    y=historical_data['Upper Band'], 
-                    name='Upper Band',
-                    line=dict(color=call_color, dash='dash')
-                ),
+                go.Scatter(x=historical_data.index, y=historical_data['Upper Band'],
+                          name='Upper Band', line=dict(color=call_color, dash='dash')),
                 row=1, col=1
             )
             fig.add_trace(
-                go.Scatter(
-                    x=historical_data.index, 
-                    y=historical_data['Lower Band'], 
-                    name='Lower Band',
-                    line=dict(color=put_color, dash='dash')
-                ),
+                go.Scatter(x=historical_data.index, y=historical_data['Lower Band'],
+                          name='Lower Band', line=dict(color=put_color, dash='dash')),
                 row=1, col=1
             )
 
-            # GEX with consistent colors
+            # GEX chart
             positive_gex = historical_data['GEX'] >= 0
             negative_gex = historical_data['GEX'] < 0
-
-            # Add positive GEX bars
+            
             fig.add_trace(
-                go.Bar(
-                    x=historical_data.index[positive_gex],
-                    y=historical_data['GEX'][positive_gex],
-                    name='Positive GEX',
-                    marker_color=call_color
-                ),
+                go.Bar(x=historical_data.index[positive_gex],
+                      y=historical_data['GEX'][positive_gex],
+                      name='Positive GEX', marker_color=call_color),
+                row=2, col=1
+            )
+            fig.add_trace(
+                go.Bar(x=historical_data.index[negative_gex],
+                      y=historical_data['GEX'][negative_gex],
+                      name='Negative GEX', marker_color=put_color),
+                row=2, col=1
+            )
+            fig.add_trace(
+                go.Scatter(x=historical_data.index,
+                          y=historical_data['Rolling GEX Avg'],
+                          name='Rolling Average',
+                          line=dict(color='magenta')),
                 row=2, col=1
             )
 
-            # Add negative GEX bars
+            # RSI
             fig.add_trace(
-                go.Bar(
-                    x=historical_data.index[negative_gex],
-                    y=historical_data['GEX'][negative_gex],
-                    name='Negative GEX',
-                    marker_color=put_color
-                ),
-                row=2, col=1
-            )
-
-            # Add rolling average
-            fig.add_trace(
-                go.Scatter(
-                    x=historical_data.index,
-                    y=historical_data['Rolling GEX Avg'],
-                    name='Rolling Average',
-                    line=dict(color='magenta')
-                ),
-                row=2, col=1
-            )
-
-            # RSI with consistent colors
-            fig.add_trace(
-                go.Scatter(
-                    x=historical_data.index,
-                    y=historical_data['RSI'],
-                    name='RSI',
-                    line=dict(color='turquoise')
-                ),
+                go.Scatter(x=historical_data.index,
+                          y=historical_data['RSI'],
+                          name='RSI',
+                          line=dict(color='turquoise')),
                 row=3, col=1
             )
-            
-            # Add overbought/oversold lines
-            fig.add_hline(
-                y=70,
-                line_dash="dash",
-                line_color=call_color,
-                row=3,
-                col=1,
-                annotation_text="Overbought"
-            )
-            fig.add_hline(
-                y=30,
-                line_dash="dash",
-                line_color=put_color,
-                row=3,
-                col=1,
-                annotation_text="Oversold"
-            )
 
-            # Update layout with consistent styling
+            # Add overbought/oversold lines
+            fig.add_hline(y=70, line_dash="dash", line_color=call_color,
+                         row=3, col=1, annotation_text="Overbought")
+            fig.add_hline(y=30, line_dash="dash", line_color=put_color,
+                         row=3, col=1, annotation_text="Oversold")
+
+            # Update layout
             fig.update_layout(
                 template="plotly_dark",
                 title=dict(
@@ -3539,42 +3574,42 @@ elif st.session_state.current_page == "Analysis":
                 )
             )
 
-            # Update X-axes for each subplot to show dates
-            for row in [1, 2, 3]:
+            # Update axes
+            for i in range(1, 4):
                 fig.update_xaxes(
-                    showticklabels=True,  # Ensure dates are visible
                     tickfont=dict(size=st.session_state.chart_text_size),
-                    title_text="Date",  # Optional: Add "Date" label to each X-axis
                     title_font=dict(size=st.session_state.chart_text_size),
-                    row=row,
-                    col=1
+                    row=i, col=1
+                )
+                fig.update_yaxes(
+                    tickfont=dict(size=st.session_state.chart_text_size),
+                    title_font=dict(size=st.session_state.chart_text_size),
+                    row=i, col=1
                 )
 
-            # Update Y-axes with consistent styling
-            fig.update_yaxes(
-                title_text="Price",
-                row=1,
-                col=1,
-                tickfont=dict(size=st.session_state.chart_text_size),
-                title_font=dict(size=st.session_state.chart_text_size)
-            )
-            fig.update_yaxes(
-                title_text="GEX",
-                row=2,
-                col=1,
-                tickfont=dict(size=st.session_state.chart_text_size),
-                title_font=dict(size=st.session_state.chart_text_size)
-            )
-            fig.update_yaxes(
-                title_text="RSI",
-                range=[0, 100],
-                row=3,
-                col=1,
-                tickfont=dict(size=st.session_state.chart_text_size),
-                title_font=dict(size=st.session_state.chart_text_size)
+            # Display technical analysis chart
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Add weekday returns analysis at the bottom
+            st.markdown("---")
+            st.subheader("Weekday Returns Analysis")
+            
+            period = st.selectbox(
+                "Select Analysis Period:",
+                options=['1y', '6mo', '3mo', '1mo'], 
+                format_func=lambda x: {
+                    '1y': '1 Year',
+                    '6mo': '6 Months', 
+                    '3mo': '3 Months',
+                    '1mo': '1 Month'
+                }[x],
+                key="weekday_returns_period"
             )
 
-            st.plotly_chart(fig, use_container_width=True)
+            weekday_returns = calculate_annualized_return(historical_data, period)
+            weekday_fig = create_weekday_returns_chart(weekday_returns)
+            st.plotly_chart(weekday_fig, use_container_width=True)
+
     st.stop()
 
 elif st.session_state.current_page == "Delta-Adjusted Value Index":
