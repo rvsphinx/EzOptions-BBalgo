@@ -935,10 +935,9 @@ def expiry_selector_fragment(page_name, available_dates):
     
     with container:
         selected = st.multiselect(
-            "Select Expiration Date(s) (max 14):",
+            "Select Expiration Date(s):",
             options=available_dates,
             default=st.session_state[state_key],
-            max_selections=14,
             key=widget_key
         )
         
@@ -1141,11 +1140,11 @@ def chart_settings():
 
         # Add refresh rate control before chart type
         if 'refresh_rate' not in st.session_state:
-            st.session_state.refresh_rate = 10  # Default refresh rate
+            st.session_state.refresh_rate = 5  # Default refresh rate
         
         new_refresh_rate = st.number_input(
             "Auto-Refresh Rate (seconds)",
-            min_value=10,
+            min_value=5,
             max_value=300,
             value=int(st.session_state.refresh_rate),
             step=1,
