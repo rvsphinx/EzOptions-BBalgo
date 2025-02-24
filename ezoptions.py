@@ -63,6 +63,35 @@ def format_ticker(ticker):
         return "^RUT"
     return ticker
 
+def check_market_status():
+    """Check if we're in pre-market, market hours, or post-market"""
+    # Get current time in PST for market checks
+    pacific = datetime.now(tz=pytz.timezone('US/Pacific'))
+    
+    # Get local time and timezone
+    local = datetime.now()
+    local_tz = datetime.now().astimezone().tzinfo
+    
+    market_message = None
+    
+    if pacific.hour >= 22 or pacific.hour < 7:
+        next_update = pacific.replace(hour=7, minute=0) if pacific.hour < 7 else \
+                     (pacific + timedelta(days=1)).replace(hour=7, minute=30)
+        time_until = next_update - pacific
+        hours, remainder = divmod(time_until.seconds, 3600)
+        minutes, _ = divmod(remainder, 60)
+        
+        # Convert PST update time to local time
+        local_next_update = next_update.astimezone(local_tz)
+        
+        market_message = f"""
+        ⚠️ **WAIT FOR NEW DATA**
+        - Current time: {local.strftime('%I:%M %p')} {local_tz}
+        - New data will be available at {local_next_update.strftime('%I:%M %p')}
+        - Time until new data: {hours}h {minutes}m
+        """
+    return market_message
+
 def fetch_options_for_date(ticker, date, S=None):
     """
     Fetches option chains for the given ticker and date.
@@ -1913,26 +1942,6 @@ def create_davi_chart(calls, puts, S):
     )
 
     return fig
-
-def check_market_status():
-    """Check if we're in pre-market, market hours, or post-market"""
-    pacific = datetime.now(tz=pytz.timezone('US/Pacific'))
-    market_message = None
-    
-    # Check if it's between 10 PM PST and 7 AM PST
-    if pacific.hour >= 22 or pacific.hour < 7:
-        next_update = pacific.replace(hour=7, minute=0) if pacific.hour < 7 else \
-                     (pacific + timedelta(days=1)).replace(hour=7, minute=30)
-        time_until = next_update - pacific
-        hours, remainder = divmod(time_until.seconds, 3600)
-        minutes, _ = divmod(remainder, 60)
-        market_message = f"""
-        ⚠️ **WAIT FOR NEW DATA**
-        - Current time (PST): {pacific.strftime('%I:%M %p')}
-        - New data will be available at 7:00 AM PST
-        - Time until new data: {hours}h {minutes}m
-        """
-    return market_message
 
 # Add at the start of each page's container
 if st.session_state.current_page:
