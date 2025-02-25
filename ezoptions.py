@@ -2801,7 +2801,7 @@ if st.session_state.current_page == "Dashboard":
                             for row in top5.itertuples():
                                 if row.strike not in added_strikes and not pd.isna(row.GEX) and row.GEX != 0:
                                     # Calculate intensity based on GEX value relative to max
-                                    intensity = max(0.3, min(1.0, abs(row.GEX) / max_gex))
+                                    intensity = max(0.6, min(1.0, abs(row.GEX) / max_gex))  # Changed minimum from 0.3 to 0.6
                                     
                                     # Get base color from session state
                                     base_color = st.session_state.call_color if row.OptionType == 'Call' else st.session_state.put_color
@@ -2899,7 +2899,35 @@ if st.session_state.current_page == "Dashboard":
                                 )
                                 st.markdown(market_text, unsafe_allow_html=True)
                             
-                            st.markdown(f"#### Current Price: ${current_price:.2f}")
+                            # Get additional market data
+                            try:
+                                stock_info = yf.Ticker(st.session_state.saved_ticker).info
+                                prev_close = stock_info.get('previousClose', 0)
+                                day_high = stock_info.get('dayHigh', 0)
+                                day_low = stock_info.get('dayLow', 0)
+                                day_open = stock_info.get('regularMarketOpen', 0)
+                                change = current_price - prev_close
+                                change_percent = (change / prev_close) * 100
+
+                                # Create market data display
+                                price_color = st.session_state.call_color if change >= 0 else st.session_state.put_color
+                                change_symbol = '+' if change >= 0 else ''
+                                
+                                price_text = f"""
+                                <div style='background-color: rgba(0,0,0,0.2); padding: 10px; border-radius: 5px;'>
+                                    <span style='font-size: 24px; color: {price_color}'>
+                                        ${current_price:.2f} {change_symbol}{change:.2f} ({change_symbol}{change_percent:.2f}%)
+                                    </span><br>
+                                    <span style='color: gray; font-size: 14px;'>
+                                        Open: ${day_open:.2f} | High: ${day_high:.2f} | Low: ${day_low:.2f} | Prev Close: ${prev_close:.2f}
+                                    </span>
+                                </div>
+                                """
+                                st.markdown(price_text, unsafe_allow_html=True)
+                            except Exception as e:
+                                st.markdown(f"#### Current Price: ${current_price:.2f}")
+                                print(f"Error fetching additional market data: {e}")
+                            
                             st.markdown("---")
 
                     # Display selected charts
