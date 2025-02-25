@@ -74,9 +74,9 @@ def check_market_status():
     
     market_message = None
     
-    if pacific.hour >= 22 or pacific.hour < 7:
+    if pacific.hour >= 21 or pacific.hour < 7:
         next_update = pacific.replace(hour=7, minute=0) if pacific.hour < 7 else \
-                     (pacific + timedelta(days=1)).replace(hour=7, minute=30)
+                     (pacific + timedelta(days=1)).replace(hour=7, minute=00)
         time_until = next_update - pacific
         hours, remainder = divmod(time_until.seconds, 3600)
         minutes, _ = divmod(remainder, 60)
@@ -87,7 +87,7 @@ def check_market_status():
         market_message = f"""
         ⚠️ **WAIT FOR NEW DATA**
         - Current time: {local.strftime('%I:%M %p')} {local_tz}
-        - New data will be available at {local_next_update.strftime('%I:%M %p')}
+        - New data will be available at approximately {local_next_update.strftime('%I:%M %p')}
         - Time until new data: {hours}h {minutes}m
         """
     return market_message
