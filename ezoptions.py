@@ -2800,32 +2800,43 @@ if st.session_state.current_page == "Dashboard":
 
                             for row in top5.itertuples():
                                 if row.strike not in added_strikes and not pd.isna(row.GEX) and row.GEX != 0:
-                                    intensity = 0.4 + (min(abs(row.GEX) / max_gex, 1.0) * 0.6)
-                                    if not pd.isna(intensity) and 0 <= intensity <= 1:
-                                        base_color = st.session_state.call_color if row.OptionType == 'Call' else st.session_state.put_color
-                                        rgb = tuple(int(base_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
-                                        color = f'rgba({rgb[0]}, {rgb[1]}, {rgb[2]}, {intensity})'
-                                        
-                                        fig_intraday.add_shape(
-                                            type='line',
-                                            x0=intraday_data.index[0],
-                                            x1=intraday_data.index[-1],
-                                            y0=row.strike,
-                                            y1=row.strike,
-                                            line=dict(color=color, width=2),
-                                            xref='x',
-                                            yref='y',
-                                            layer='below'
-                                        )
-                                        fig_intraday.add_annotation(
-                                            x=intraday_data.index[-1],
-                                            y=row.strike,
-                                            text=f"GEX {row.GEX:,.0f}",
-                                            font=dict(color=color),
-                                            showarrow=True,
-                                            arrowcolor=color
-                                        )
-                                        added_strikes.add(row.strike)
+                                    # Calculate intensity based on GEX value relative to max
+                                    intensity = max(0.3, min(1.0, abs(row.GEX) / max_gex))
+                                    
+                                    # Get base color from session state
+                                    base_color = st.session_state.call_color if row.OptionType == 'Call' else st.session_state.put_color
+                                    
+                                    # Convert hex to RGB
+                                    rgb = tuple(int(base_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
+                                    
+                                    # Create color with intensity
+                                    color = f'rgba({rgb[0]}, {rgb[1]}, {rgb[2]}, {intensity})'
+                                    
+                                    fig_intraday.add_shape(
+                                        type='line',
+                                        x0=intraday_data.index[0],
+                                        x1=intraday_data.index[-1],
+                                        y0=row.strike,
+                                        y1=row.strike,
+                                        line=dict(
+                                            color=color,
+                                            width=2
+                                        ),
+                                        xref='x',
+                                        yref='y',
+                                        layer='below'
+                                    )
+                                    
+                                    # Add text annotation with matching opacity
+                                    fig_intraday.add_annotation(
+                                        x=intraday_data.index[-1],
+                                        y=row.strike,
+                                        text=f"GEX {row.GEX:,.0f}",
+                                        font=dict(color=color),
+                                        showarrow=True,
+                                        arrowcolor=color
+                                    )
+                                    added_strikes.add(row.strike)
 
                             # Include GEX strikes in y-axis range
                             y_min = min(y_min, nearest_3['strike'].min() - padding)
