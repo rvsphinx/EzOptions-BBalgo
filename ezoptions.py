@@ -262,6 +262,574 @@ def create_weekday_returns_chart(returns):
     
     return fig
 
+def analyze_options_flow(calls_df, puts_df, current_price):
+    """Analyze options flow to determine bought vs sold contracts"""
+    # Deep copy to avoid modifying originals
+    calls = calls_df.copy()
+    puts = puts_df.copy()
+    
+    # Determine if option is likely bought/sold based on trade price vs bid/ask
+    # For calls: trades near ask = likely bought, trades near bid = likely sold
+    calls['trade_type'] = calls.apply(lambda x: 'bought' if x['lastPrice'] >= (x['bid'] + (x['ask'] - x['bid'])*0.6) else 'sold', axis=1)
+    puts['trade_type'] = puts.apply(lambda x: 'bought' if x['lastPrice'] >= (x['bid'] + (x['ask'] - x['bid'])*0.6) else 'sold', axis=1)
+    
+    # Add ITM/OTM classification
+    calls['moneyness'] = calls.apply(lambda x: 'ITM' if x['strike'] <= current_price else 'OTM', axis=1)
+    puts['moneyness'] = puts.apply(lambda x: 'ITM' if x['strike'] >= current_price else 'OTM', axis=1)
+    
+    # Calculate volume-weighted stats
+    call_stats = {
+        'bought': {
+            'volume': calls[calls['trade_type'] == 'bought']['volume'].sum(),
+            'premium': (calls[calls['trade_type'] == 'bought']['volume'] * calls[calls['trade_type'] == 'bought']['lastPrice'] * 100).sum()
+        },
+        'sold': {
+            'volume': calls[calls['trade_type'] == 'sold']['volume'].sum(),
+            'premium': (calls[calls['trade_type'] == 'sold']['volume'] * calls[calls['trade_type'] == 'sold']['lastPrice'] * 100).sum()
+        },
+        'OTM': {
+            'volume': calls[calls['moneyness'] == 'OTM']['volume'].sum(),
+            'premium': (calls[calls['moneyness'] == 'OTM']['volume'] * calls[calls['moneyness'] == 'OTM']['lastPrice'] * 100).sum()
+        },
+        'ITM': {
+            'volume': calls[calls['moneyness'] == 'ITM']['volume'].sum(), 
+            'premium': (calls[calls['moneyness'] == 'ITM']['volume'] * calls[calls['moneyness'] == 'ITM']['lastPrice'] * 100).sum()
+        }
+    }
+    
+    put_stats = {
+        'bought': {
+            'volume': puts[puts['trade_type'] == 'bought']['volume'].sum(),
+            'premium': (puts[puts['trade_type'] == 'bought']['volume'] * puts[puts['trade_type'] == 'bought']['lastPrice'] * 100).sum()
+        },
+        'sold': {
+            'volume': puts[puts['trade_type'] == 'sold']['volume'].sum(),
+            'premium': (puts[puts['trade_type'] == 'sold']['volume'] * puts[puts['trade_type'] == 'sold']['lastPrice'] * 100).sum()
+        },
+        'OTM': {
+            'volume': puts[puts['moneyness'] == 'OTM']['volume'].sum(),
+            'premium': (puts[puts['moneyness'] == 'OTM']['volume'] * puts[puts['moneyness'] == 'OTM']['lastPrice'] * 100).sum()
+        },
+        'ITM': {
+            'volume': puts[puts['moneyness'] == 'ITM']['volume'].sum(), 
+            'premium': (puts[puts['moneyness'] == 'ITM']['volume'] * puts[puts['moneyness'] == 'ITM']['lastPrice'] * 100).sum()
+        }
+    }
+    
+    # Calculate OTM bought/sold breakdown
+    otm_calls_bought = calls[(calls['moneyness'] == 'OTM') & (calls['trade_type'] == 'bought')]['volume'].sum()
+    otm_calls_sold = calls[(calls['moneyness'] == 'OTM') & (calls['trade_type'] == 'sold')]['volume'].sum()
+    otm_puts_bought = puts[(puts['moneyness'] == 'OTM') & (puts['trade_type'] == 'bought')]['volume'].sum()
+    otm_puts_sold = puts[(puts['moneyness'] == 'OTM') & (puts['trade_type'] == 'sold')]['volume'].sum()
+    
+    # Calculate total premium values
+    total_call_premium = (calls['volume'] * calls['lastPrice'] * 100).sum()
+    total_put_premium = (puts['volume'] * puts['lastPrice'] * 100).sum()
+    
+    return {
+        'calls': call_stats,
+        'puts': put_stats,
+        'otm_detail': {
+            'calls_bought': otm_calls_bought,
+            'calls_sold': otm_calls_sold,
+            'puts_bought': otm_puts_bought,
+            'puts_sold': otm_puts_sold
+        },
+        'total_premium': {
+            'calls': total_call_premium,
+            'puts': total_put_premium
+        }
+    }
+
+def create_option_flow_charts(flow_data, title="Options Flow Analysis"):
+    """Create visual charts for options flow analysis"""
+    call_color = st.session_state.call_color
+    put_color = st.session_state.put_color
+    
+    # Create bar chart for bought vs sold
+    fig_flow = go.Figure()
+    
+    # Calls bought/sold
+    fig_flow.add_trace(go.Bar(
+        x=['Calls Bought', 'Calls Sold'],
+        y=[flow_data['calls']['bought']['volume'], flow_data['calls']['sold']['volume']],
+        name='Calls',
+        marker_color=call_color
+    ))
+    
+    # Puts bought/sold
+    fig_flow.add_trace(go.Bar(
+        x=['Puts Bought', 'Puts Sold'],
+        y=[flow_data['puts']['bought']['volume'], flow_data['puts']['sold']['volume']],
+        name='Puts',
+        marker_color=put_color
+    ))
+    
+    fig_flow.update_layout(
+        title=dict(
+            text=title,
+            x=0,
+            xanchor='left',
+            font=dict(size=st.session_state.chart_text_size + 8)
+        ),
+        xaxis_title=dict(
+            text='Trade Direction',
+            font=dict(size=st.session_state.chart_text_size)
+        ),
+        yaxis_title=dict(
+            text='Volume',
+            font=dict(size=st.session_state.chart_text_size)
+        ),
+        legend=dict(
+            font=dict(size=st.session_state.chart_text_size)
+        ),
+        barmode='group',
+        template="plotly_dark"
+    )
+    
+    # Create OTM/ITM chart
+    fig_money = go.Figure()
+    
+    # Calls OTM/ITM
+    fig_money.add_trace(go.Bar(
+        x=['OTM Calls', 'ITM Calls'],
+        y=[flow_data['calls']['OTM']['volume'], flow_data['calls']['ITM']['volume']],
+        name='Calls',
+        marker_color=call_color
+    ))
+    
+    # Puts OTM/ITM
+    fig_money.add_trace(go.Bar(
+        x=['OTM Puts', 'ITM Puts'],
+        y=[flow_data['puts']['OTM']['volume'], flow_data['puts']['ITM']['volume']],
+        name='Puts',
+        marker_color=put_color
+    ))
+    
+    fig_money.update_layout(
+        title=dict(
+            text="OTM vs ITM Volume",
+            x=0,
+            xanchor='left',
+            font=dict(size=st.session_state.chart_text_size + 8)
+        ),
+        xaxis_title=dict(
+            text='Moneyness',
+            font=dict(size=st.session_state.chart_text_size)
+        ),
+        yaxis_title=dict(
+            text='Volume',
+            font=dict(size=st.session_state.chart_text_size)
+        ),
+        legend=dict(
+            font=dict(size=st.session_state.chart_text_size)
+        ),
+        barmode='group',
+        template="plotly_dark"
+    )
+    
+    # Premium chart (donut)
+    premium_labels = ['Call Premium', 'Put Premium']
+    premium_values = [flow_data['total_premium']['calls'], flow_data['total_premium']['puts']]
+    
+    fig_premium = go.Figure(data=[go.Pie(
+        labels=premium_labels,
+        values=premium_values,
+        hole=0.4,
+        marker=dict(colors=[call_color, put_color])
+    )])
+    
+    total_premium = flow_data['total_premium']['calls'] + flow_data['total_premium']['puts']
+    premium_text = f"${total_premium:,.0f}"
+    
+    fig_premium.update_layout(
+        title=dict(
+            text="Total Premium Flow",
+            x=0,
+            xanchor='left',
+            font=dict(size=st.session_state.chart_text_size + 8)
+        ),
+        legend=dict(font=dict(size=st.session_state.chart_text_size)),
+        annotations=[dict(
+            text=premium_text,
+            x=0.5, y=0.5,
+            font=dict(size=st.session_state.chart_text_size + 4),
+            showarrow=False
+        )],
+        template="plotly_dark"
+    )
+    
+    # OTM Analysis Breakdown (horizontal)
+    fig_otm = go.Figure()
+    
+    # OTM Calls bought/sold
+    fig_otm.add_trace(go.Bar(
+        y=['OTM Calls'],
+        x=[flow_data['otm_detail']['calls_bought']],
+        name='Bought',
+        orientation='h',
+        marker_color='lightgreen',
+        offsetgroup=0
+    ))
+    
+    fig_otm.add_trace(go.Bar(
+        y=['OTM Calls'],
+        x=[flow_data['otm_detail']['calls_sold']],
+        name='Sold',
+        orientation='h',
+        marker_color='darkgreen',
+        offsetgroup=1
+    ))
+    
+    # OTM Puts bought/sold
+    fig_otm.add_trace(go.Bar(
+        y=['OTM Puts'],
+        x=[flow_data['otm_detail']['puts_bought']],
+        name='Bought',
+        orientation='h',
+        marker_color='pink',
+        offsetgroup=0
+    ))
+    
+    fig_otm.add_trace(go.Bar(
+        y=['OTM Puts'],
+        x=[flow_data['otm_detail']['puts_sold']],
+        name='Sold',
+        orientation='h',
+        marker_color='darkred',
+        offsetgroup=1
+    ))
+    
+    fig_otm.update_layout(
+        title=dict(
+            text="OTM Options Bought vs Sold",
+            x=0,
+            xanchor='left',
+            font=dict(size=st.session_state.chart_text_size + 8)
+        ),
+        xaxis_title=dict(
+            text='Volume',
+            font=dict(size=st.session_state.chart_text_size)
+        ),
+        legend=dict(
+            font=dict(size=st.session_state.chart_text_size)
+        ),
+        barmode='group',
+        template="plotly_dark"
+    )
+    
+    return fig_flow, fig_money, fig_premium, fig_otm
+
+def create_option_premium_heatmap(calls_df, puts_df, strikes, expiry_dates, current_price):
+    """Create a heatmap showing premium distribution across strikes and expiries"""
+    # Initialize data matrices
+    call_premium = np.zeros((len(expiry_dates), len(strikes)))
+    put_premium = np.zeros((len(expiry_dates), len(strikes)))
+    
+    # Map strikes and expiry dates to indices
+    strike_to_idx = {strike: i for i, strike in enumerate(strikes)}
+    expiry_to_idx = {expiry: i for i, expiry in enumerate(expiry_dates)}
+    
+    # Fill matrices with premium data (volume * price)
+    for _, row in calls_df.iterrows():
+        if row['strike'] in strike_to_idx and row['expiry_date'] in expiry_to_idx:
+            i = expiry_to_idx[row['expiry_date']]
+            j = strike_to_idx[row['strike']]
+            call_premium[i, j] = row['volume'] * row['lastPrice'] * 100
+    
+    for _, row in puts_df.iterrows():
+        if row['strike'] in strike_to_idx and row['expiry_date'] in expiry_to_idx:
+            i = expiry_to_idx[row['expiry_date']]
+            j = strike_to_idx[row['strike']]
+            put_premium[i, j] = row['volume'] * row['lastPrice'] * 100
+    
+    # Create heatmaps
+    fig_calls = go.Figure(data=go.Heatmap(
+        z=call_premium,
+        x=strikes,
+        y=expiry_dates,
+        colorscale=[[0, 'rgba(0,0,0,0)'], [0.01, 'rgba(0,255,0,0.1)'], [1, st.session_state.call_color]],
+        hoverongaps=False,
+        name="Call Premium",
+        showscale=True,
+        colorbar=dict(
+            title="Premium ($)",
+            titleside="top",
+            tickformat="$,.0f"
+        )
+    ))
+    
+    # Add current price line
+    fig_calls.add_vline(
+        x=current_price,
+        line_dash="dash",
+        line_color="white",
+        opacity=0.7
+    )
+    
+    fig_calls.update_layout(
+        title=dict(
+            text="Call Premium Heatmap",
+            x=0,
+            xanchor='left',
+            font=dict(size=st.session_state.chart_text_size + 8)
+        ),
+        xaxis_title=dict(
+            text='Strike Price',
+            font=dict(size=st.session_state.chart_text_size)
+        ),
+        yaxis_title=dict(
+            text='Expiration Date',
+            font=dict(size=st.session_state.chart_text_size)
+        ),
+        template="plotly_dark",
+        yaxis=dict(
+            tickfont=dict(size=st.session_state.chart_text_size)
+        ),
+        xaxis=dict(
+            tickfont=dict(size=st.session_state.chart_text_size)
+        )
+    )
+    
+    fig_puts = go.Figure(data=go.Heatmap(
+        z=put_premium,
+        x=strikes,
+        y=expiry_dates,
+        colorscale=[[0, 'rgba(0,0,0,0)'], [0.01, 'rgba(255,0,0,0.1)'], [1, st.session_state.put_color]],
+        hoverongaps=False,
+        name="Put Premium",
+        showscale=True,
+        colorbar=dict(
+            title="Premium ($)",
+            titleside="top",
+            tickformat="$,.0f"
+        )
+    ))
+    
+    # Add current price line
+    fig_puts.add_vline(
+        x=current_price,
+        line_dash="dash",
+        line_color="white",
+        opacity=0.7
+    )
+    
+    fig_puts.update_layout(
+        title=dict(
+            text="Put Premium Heatmap",
+            x=0,
+            xanchor='left',
+            font=dict(size=st.session_state.chart_text_size + 8)
+        ),
+        xaxis_title=dict(
+            text='Strike Price',
+            font=dict(size=st.session_state.chart_text_size)
+        ),
+        yaxis_title=dict(
+            text='Expiration Date',
+            font=dict(size=st.session_state.chart_text_size)
+        ),
+        template="plotly_dark",
+        yaxis=dict(
+            tickfont=dict(size=st.session_state.chart_text_size)
+        ),
+        xaxis=dict(
+            tickfont=dict(size=st.session_state.chart_text_size)
+        )
+    )
+    
+    return fig_calls, fig_puts
+
+def create_premium_heatmap(calls_df, puts_df, filtered_strikes, selected_expiry_dates, current_price):
+    """Create heatmaps showing premium distribution across strikes and expiration dates."""
+    # Initialize data matrices
+    call_premium = np.zeros((len(selected_expiry_dates), len(filtered_strikes)))
+    put_premium = np.zeros((len(selected_expiry_dates), len(filtered_strikes)))
+    
+    # Map strikes and expiry dates to indices
+    strike_to_idx = {strike: i for i, strike in enumerate(filtered_strikes)}
+    expiry_to_idx = {expiry: i for i, expiry in enumerate(selected_expiry_dates)}
+    
+    # Fill matrices with premium data (volume * price)
+    for _, row in calls_df.iterrows():
+        if row['strike'] in filtered_strikes and row['extracted_expiry'].strftime('%Y-%m-%d') in expiry_to_idx:
+            strike_idx = strike_to_idx[row['strike']]
+            expiry_idx = expiry_to_idx[row['extracted_expiry'].strftime('%Y-%m-%d')]
+            call_premium[expiry_idx][strike_idx] += row['volume'] * row['lastPrice'] * 100
+    
+    for _, row in puts_df.iterrows():
+        if row['strike'] in filtered_strikes and row['extracted_expiry'].strftime('%Y-%m-%d') in expiry_to_idx:
+            strike_idx = strike_to_idx[row['strike']]
+            expiry_idx = expiry_to_idx[row['extracted_expiry'].strftime('%Y-%m-%d')]
+            put_premium[expiry_idx][strike_idx] += row['volume'] * row['lastPrice'] * 100
+    
+    # Create heatmaps
+    fig_calls = go.Figure(data=go.Heatmap(
+        z=call_premium,
+        x=filtered_strikes,
+        y=selected_expiry_dates,
+        colorscale=[[0, 'rgba(0,0,0,0)'], [0.01, 'rgba(0,255,0,0.1)'], [1, st.session_state.call_color]],
+        hoverongaps=False,
+        name="Call Premium",
+        showscale=True,
+        colorbar=dict(
+            title="Premium ($)",
+            tickformat="$,.0f"
+        )
+    ))
+    
+    # Add current price line
+    fig_calls.add_vline(
+        x=current_price,
+        line_dash="dash",
+        line_color="white",
+        opacity=0.7
+    )
+    
+    fig_calls.update_layout(
+        title=dict(
+            text="Call Premium Heatmap",
+            x=0,
+            xanchor='left',
+            font=dict(size=st.session_state.chart_text_size + 8)
+        ),
+        xaxis_title=dict(
+            text='Strike Price',
+            font=dict(size=st.session_state.chart_text_size)
+        ),
+        yaxis_title=dict(
+            text='Expiration Date',
+            font=dict(size=st.session_state.chart_text_size)
+        ),
+        template="plotly_dark",
+        yaxis=dict(
+            tickfont=dict(size=st.session_state.chart_text_size)
+        ),
+        xaxis=dict(
+            tickfont=dict(size=st.session_state.chart_text_size)
+        )
+    )
+    
+    fig_puts = go.Figure(data=go.Heatmap(
+        z=put_premium,
+        x=filtered_strikes,
+        y=selected_expiry_dates,
+        colorscale=[[0, 'rgba(0,0,0,0)'], [0.01, 'rgba(255,0,0,0.1)'], [1, st.session_state.put_color]],
+        hoverongaps=False,
+        name="Put Premium",
+        showscale=True,
+        colorbar=dict(
+            title="Premium ($)",
+            tickformat="$,.0f"
+        )
+    ))
+    
+    # Add current price line
+    fig_puts.add_vline(
+        x=current_price,
+        line_dash="dash",
+        line_color="white",
+        opacity=0.7
+    )
+    
+    fig_puts.update_layout(
+        title=dict(
+            text="Put Premium Heatmap",
+            x=0,
+            xanchor='left',
+            font=dict(size=st.session_state.chart_text_size + 8)
+        ),
+        xaxis_title=dict(
+            text='Strike Price',
+            font=dict(size=st.session_state.chart_text_size)
+        ),
+        yaxis_title=dict(
+            text='Expiration Date',
+            font=dict(size=st.session_state.chart_text_size)
+        ),
+        template="plotly_dark",
+        yaxis=dict(
+            tickfont=dict(size=st.session_state.chart_text_size)
+        ),
+        xaxis=dict(
+            tickfont=dict(size=st.session_state.chart_text_size)
+        )
+    )
+    
+    return fig_calls, fig_puts
+
+def create_premium_ratio_chart(calls_df, puts_df):
+    """Create a chart showing call vs put premium ratio over different strikes"""
+    # Alternative approach to avoid DataFrameGroupBy.apply warnings
+    # Create temporary columns for premium calculation
+    calls_df_mod = calls_df.copy()
+    calls_df_mod['premium'] = calls_df_mod['volume'] * calls_df_mod['lastPrice'] * 100
+    call_premium_by_strike = calls_df_mod.groupby('strike')['premium'].sum().reset_index()
+    
+    puts_df_mod = puts_df.copy()
+    puts_df_mod['premium'] = puts_df_mod['volume'] * puts_df_mod['lastPrice'] * 100
+    put_premium_by_strike = puts_df_mod.groupby('strike')['premium'].sum().reset_index()
+    
+    # Merge data
+    premium_data = pd.merge(call_premium_by_strike, put_premium_by_strike, on='strike', how='outer', suffixes=('_call', '_put')).fillna(0)
+    premium_data['ratio'] = premium_data['premium_call'] / premium_data['premium_put'].replace(0, 1)  # Avoid division by zero
+    premium_data['ratio'] = premium_data['ratio'].clip(0, 10)  # Cap the ratio at 10 for visualization
+    
+    # Create visualization
+    fig = go.Figure()
+    
+    fig.add_trace(go.Scatter(
+        x=premium_data['strike'],
+        y=premium_data['ratio'],
+        mode='markers+lines',
+        marker=dict(
+            size=10,
+            color=premium_data['ratio'].apply(lambda x: st.session_state.call_color if x > 1 else st.session_state.put_color),
+            symbol='circle',
+            line=dict(
+                width=2,
+                color='white'
+            )
+        ),
+        name='Call/Put Premium Ratio'
+    ))
+    
+    # Add line at ratio = 1
+    fig.add_hline(
+        y=1,
+        line_dash="dash",
+        line_color="white",
+        opacity=0.7,
+        annotation_text="C/P = 1",
+        annotation_position="bottom right"
+    )
+    
+    fig.update_layout(
+        title=dict(
+            text="Call vs Put Premium Ratio by Strike",
+            x=0,
+            xanchor='left',
+            font=dict(size=st.session_state.chart_text_size + 8)
+        ),
+        xaxis_title=dict(
+            text='Strike Price',
+            font=dict(size=st.session_state.chart_text_size)
+        ),
+        yaxis_title=dict(
+            text='Call/Put Premium Ratio',
+            font=dict(size=st.session_state.chart_text_size)
+        ),
+        template="plotly_dark",
+        yaxis=dict(
+            tickfont=dict(size=st.session_state.chart_text_size)
+        ),
+        xaxis=dict(
+            tickfont=dict(size=st.session_state.chart_text_size)
+        )
+    )
+    
+    return fig
+
 # -------------------------------
 # Fetch all options experations and add extract expiry
 # -------------------------------
@@ -1006,7 +1574,7 @@ def save_ticker(ticker):
     st.session_state.saved_ticker = ticker
 
 st.sidebar.title("Navigation")
-pages = ["Dashboard", "Volume Ratio", "OI & Volume", "Gamma Exposure", "Delta Exposure", 
+pages = ["Dashboard", "OI & Volume", "Gamma Exposure", "Delta Exposure", 
           "Vanna Exposure", "Charm Exposure", "Speed Exposure", "Vomma Exposure", "Delta-Adjusted Value Index", "Max Pain", "GEX Surface", "IV Surface",
           "Analysis", "Calculated Greeks"]
 
@@ -1740,11 +2308,42 @@ def create_davi_chart(calls, puts, S):
     call_color = st.session_state.call_color
     put_color = st.session_state.put_color
 
-    # Calculate DAVI for calls and puts with filtering
-    # Only keep non-zero values
+    # Create deep copies to avoid modifying original dataframes
     calls_df = calls.copy()
     puts_df = puts.copy()
     
+    # Check if calc_delta column exists, if not, calculate delta
+    if 'calc_delta' not in calls_df.columns:
+        # Get current date and calculate time to expiration
+        today = datetime.today().date()
+        
+        # Extract expiry date - use the first one if multiple
+        if 'extracted_expiry' in calls_df.columns and not calls_df['extracted_expiry'].empty:
+            selected_expiry = calls_df['extracted_expiry'].iloc[0]
+            t_days = max((selected_expiry - today).days, 1)  # Ensure at least 1 day
+            t = t_days / 365.0
+            
+            # Define function to compute delta
+            def compute_delta(row, flag):
+                sigma = row.get("impliedVolatility", None)
+                if sigma is None or sigma <= 0:
+                    return 0.5  # Default delta if IV is missing or invalid
+                try:
+                    delta_val, _, _ = calculate_greeks(flag, S, row["strike"], t, sigma)
+                    return delta_val
+                except Exception:
+                    return 0.5  # Default delta if calculation fails
+            
+            # Calculate delta for calls and puts
+            calls_df["calc_delta"] = calls_df.apply(lambda row: compute_delta(row, "c"), axis=1)
+            puts_df["calc_delta"] = puts_df.apply(lambda row: compute_delta(row, "p"), axis=1)
+        else:
+            # If no expiry information, use approximate delta based on strike
+            calls_df["calc_delta"] = calls_df.apply(lambda row: max(0, min(1, 1 - (row["strike"] - S) / (S * 0.1))), axis=1)
+            puts_df["calc_delta"] = puts_df.apply(lambda row: max(0, min(1, (row["strike"] - S) / (S * 0.1))), axis=1)
+    
+    # Calculate DAVI for calls and puts with filtering
+    # Only keep non-zero values
     calls_df['DAVI'] = (calls_df['volume'] + calls_df['openInterest']) * calls_df['lastPrice'] * calls_df['calc_delta']
     calls_df = calls_df[calls_df['DAVI'] != 0][['strike', 'DAVI']].copy()
     calls_df['OptionType'] = 'Call'
@@ -1953,7 +2552,6 @@ if st.session_state.current_page == "OI & Volume":
     main_container = st.container()
     with main_container:
         st.empty()  # Clear previous content
-        st.write("**Select filters below to see updated data, charts, and tables.**")
         col1, col2 = st.columns([0.94, 0.06])
         with col1:
             user_ticker = st.text_input("Enter Stock Ticker (e.g., SPY, TSLA, SPX, NDX):", saved_ticker, key="options_data_ticker")
@@ -1965,10 +2563,23 @@ if st.session_state.current_page == "OI & Volume":
                 st.rerun()
         ticker = format_ticker(user_ticker)
         
-        # Clear cache if ticker changes
+        # Clear cache and expiry selections if ticker changes
         if ticker != saved_ticker:
             st.cache_data.clear()
             save_ticker(ticker)  # Save the ticker
+            
+            # Clear expiry selection state for current page when ticker changes
+            page_expiry_key = f"{st.session_state.current_page}_selected_dates"
+            if page_expiry_key in st.session_state:
+                st.session_state[page_expiry_key] = []
+            
+            # Also clear any expiry selector widgets
+            selector_key = f"{st.session_state.current_page}_expiry_selector"
+            if selector_key in st.session_state:
+                st.session_state[selector_key] = []
+            
+            # Force rerun to refresh available expiry dates
+            st.rerun()
         
         if ticker:
             # Fetch price once
@@ -1986,40 +2597,301 @@ if st.session_state.current_page == "OI & Volume":
                 st.session_state.expiry_selector_container = selector_container
                 
                 if not selected_expiry_dates:
-                    st.warning("Please select at least one expiration date.")
+                    st.info("Please select at least one expiration date.")
                     st.stop()
                 
                 all_calls, all_puts = fetch_and_process_multiple_dates(
                     ticker,
                     selected_expiry_dates,
-                    lambda t, d: fetch_options_for_date(t, d, S)  # Pass S to fetch_options_for_date
+                    lambda t, d: fetch_options_for_date(t, d, S)
                 )
                 
                 if all_calls.empty and all_puts.empty:
                     st.warning("No options data available for the selected dates.")
                     st.stop()
                 
-                volume_over_oi = st.checkbox("Show only rows where Volume > Open Interest")
-                # Filter data based on volume over OI if checked
-                calls_filtered = all_calls.copy()
-                puts_filtered = all_puts.copy()
-                if volume_over_oi:
-                    calls_filtered = calls_filtered[calls_filtered['volume'] > calls_filtered['openInterest']]
-                    puts_filtered = puts_filtered[puts_filtered['volume'] > puts_filtered['openInterest']]
-                if calls_filtered.empty and puts_filtered.empty:
-                    st.warning("No data left after applying filters.")
-                else:
-                    charts_container = st.container()
-                    tables_container = st.container()
-                    with charts_container:
-                        st.subheader(f"Options Data for {ticker} (Multiple Expiries)")
-                        if not calls_filtered.empty and not puts_filtered.empty:
-                            fig_oi, fig_volume = create_oi_volume_charts(calls_filtered, puts_filtered, S)
-                            st.plotly_chart(fig_oi, use_container_width=True, key=f"Options Data_oi_chart")
-                            st.plotly_chart(fig_volume, use_container_width=True, key=f"Options Data_volume_chart")
-                        else:
-                            st.warning("No data to chart for the chosen filters.")
-                    with tables_container:
+                # New: Add tabs to organize content
+                tab1, tab2, tab3, tab4 = st.tabs(["OI & Volume Charts", "Options Flow Analysis", "Premium Analysis", "Data Tables"])
+                
+                with tab1:
+                    # Original OI and Volume charts
+                    oi_fig, volume_fig = create_oi_volume_charts(all_calls, all_puts, S)
+                    st.plotly_chart(oi_fig, use_container_width=True)
+                    st.plotly_chart(volume_fig, use_container_width=True)
+                
+                with tab2:
+                    # New: Options flow analysis and visualizations
+                    flow_data = analyze_options_flow(all_calls, all_puts, S)
+                    flow_fig, money_fig, premium_fig, otm_fig = create_option_flow_charts(flow_data)
+                    
+                    # Create two columns for flow metrics
+                    flow_col1, flow_col2 = st.columns(2)
+                    
+                    with flow_col1:
+                        # Show bought vs sold volume
+                        st.plotly_chart(flow_fig, use_container_width=True)
+                        
+                        # Show OTM vs ITM volume
+                        st.plotly_chart(money_fig, use_container_width=True)
+                    
+                    with flow_col2:
+                        # Show premium distribution
+                        st.plotly_chart(premium_fig, use_container_width=True)
+                        
+                        # Show OTM analysis
+                        st.plotly_chart(otm_fig, use_container_width=True)
+                    
+                    # Summary metrics display
+                    st.subheader("Options Flow Summary")
+                    
+                    # Create a styled DataFrame for summary stats
+                    summary_data = {
+                        'Metric': [
+                            'Total Call Premium', 'Total Put Premium',
+                            'Call Volume', 'Put Volume',
+                            'OTM Calls Bought', 'OTM Calls Sold',
+                            'OTM Puts Bought', 'OTM Puts Sold'
+                        ],
+                        'Value': [
+                            f"${flow_data['total_premium']['calls']:,.0f}",
+                            f"${flow_data['total_premium']['puts']:,.0f}",
+                            f"{flow_data['calls']['bought']['volume'] + flow_data['calls']['sold']['volume']:,.0f}",
+                            f"{flow_data['puts']['bought']['volume'] + flow_data['puts']['sold']['volume']:,.0f}",
+                            f"{flow_data['otm_detail']['calls_bought']:,.0f}",
+                            f"{flow_data['otm_detail']['calls_sold']:,.0f}",
+                            f"{flow_data['otm_detail']['puts_bought']:,.0f}",
+                            f"{flow_data['otm_detail']['puts_sold']:,.0f}"
+                        ],
+                        'Type': [
+                            'Call', 'Put',
+                            'Call', 'Put',
+                            'Call', 'Call',
+                            'Put', 'Put'
+                        ]
+                    }
+                    
+                    summary_df = pd.DataFrame(summary_data)
+                    
+                    # Apply styling with conditional formatting
+                    def color_type(val):
+                        color = st.session_state.call_color if val == 'Call' else st.session_state.put_color
+                        return f'color: {color}'
+
+                    # Display the table with styling
+                    st.dataframe(
+                        summary_df.style.map(lambda val: f'color: {st.session_state.call_color if val == "Call" else st.session_state.put_color}', subset=['Type']),
+                        hide_index=True,
+                        use_container_width=True
+                    )
+                    # Calculate and display put/call ratio
+                    put_call_ratio = flow_data['puts']['bought']['volume'] / max(flow_data['calls']['bought']['volume'], 1)
+                    
+                    # Format the ratio as a string with 2 decimal places
+                    ratio_str = f"{put_call_ratio:.2f}"
+                    
+                    # Determine background color based on ratio value
+                    if put_call_ratio > 1.5:
+                        bgcolor = "rgba(255, 0, 0, 0.2)"  # Red background for high put/call ratio
+                    elif put_call_ratio < 0.7:
+                        bgcolor = "rgba(0, 255, 0, 0.2)"  # Green background for low put/call ratio
+                    else:
+                        bgcolor = "rgba(255, 255, 255, 0.1)"  # Neutral background
+                    
+                    # Display put/call ratio in a styled container
+                    st.markdown(
+                        f"""
+                        <div style="background-color: {bgcolor}; padding: 10px; border-radius: 5px; margin-bottom: 10px;">
+                            <h3 style="margin: 0;">Put/Call Volume Ratio: {ratio_str}</h3>
+                            <p style="margin: 5px 0 0 0; font-size: 0.8em;">
+                                {
+                                    "Elevated put buying - possible bearish sentiment" if put_call_ratio > 1.5 else
+                                    "More call buying than put buying - possible bullish sentiment" if put_call_ratio < 0.7 else
+                                    "Neutral put/call ratio"
+                                }
+                            </p>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+                
+                with tab3:
+                    # New: Advanced premium analysis
+                    st.subheader("Premium Distribution Analysis")
+                    
+                    # Create premium ratio chart
+                    premium_ratio_chart = create_premium_ratio_chart(all_calls, all_puts)
+                    
+                    # Display premium ratio chart
+                    st.plotly_chart(premium_ratio_chart, use_container_width=True)
+                    
+                    # Premium summary statistics
+                    total_call_premium = (all_calls['volume'] * all_calls['lastPrice'] * 100).sum()
+                    total_put_premium = (all_puts['volume'] * all_puts['lastPrice'] * 100).sum()
+                    premium_ratio = total_call_premium / max(total_put_premium, 1)  # Avoid division by zero
+                    
+                    # Premium by moneyness
+                    all_calls['moneyness'] = all_calls.apply(lambda x: 'ITM' if x['strike'] <= S else 'OTM', axis=1)
+                    all_puts['moneyness'] = all_puts.apply(lambda x: 'ITM' if x['strike'] >= S else 'OTM', axis=1)
+                    
+                    otm_call_premium = (all_calls[all_calls['moneyness'] == 'OTM']['volume'] * 
+                                    all_calls[all_calls['moneyness'] == 'OTM']['lastPrice'] * 100).sum()
+                    itm_call_premium = (all_calls[all_calls['moneyness'] == 'ITM']['volume'] * 
+                                    all_calls[all_calls['moneyness'] == 'ITM']['lastPrice'] * 100).sum()
+                    otm_put_premium = (all_puts[all_puts['moneyness'] == 'OTM']['volume'] * 
+                                    all_puts[all_puts['moneyness'] == 'OTM']['lastPrice'] * 100).sum()
+                    itm_put_premium = (all_puts[all_puts['moneyness'] == 'ITM']['volume'] * 
+                                    all_puts[all_puts['moneyness'] == 'ITM']['lastPrice'] * 100).sum()
+                    
+                    # Display premium metrics in a cleaner format with call/put ratio indicator
+                    st.markdown("### Premium Summary")
+                    
+                    # Call/put premium ratio status indicator
+                    ratio_status = ""
+                    if premium_ratio > 1.5:
+                        ratio_status = "Bullish (high call premium)"
+                        ratio_color = st.session_state.call_color
+                    elif premium_ratio < 0.7:
+                        ratio_status = "Bearish (high put premium)"
+                        ratio_color = st.session_state.put_color
+                    else:
+                        ratio_status = "Neutral"
+                        ratio_color = "white"
+                    
+                    # Create metrics with custom styling
+                    st.markdown(
+                        f"""
+                        <div style="padding: 10px; border-radius: 5px; background-color: rgba(50,50,50,0.3); margin-bottom: 15px;">
+                            <h4>Call/Put Premium Ratio: <span style="color: {ratio_color}">{premium_ratio:.2f}</span> {ratio_status}</h4>
+                        </div>
+                        """, 
+                        unsafe_allow_html=True
+                    )
+                    
+                    # Create three columns for better organization
+                    premium_col1, premium_col2, premium_col3 = st.columns(3)
+                    
+                    with premium_col1:
+                        st.markdown(f"<h4 style='color: {st.session_state.call_color}'>Call Premium</h4>", unsafe_allow_html=True)
+                        st.metric("Total", f"${total_call_premium:,.0f}")
+                        st.metric("OTM", f"${otm_call_premium:,.0f}", f"{otm_call_premium/total_call_premium*100:.1f}%" if total_call_premium > 0 else "0%")
+                        st.metric("ITM", f"${itm_call_premium:,.0f}", f"{itm_call_premium/total_call_premium*100:.1f}%" if total_call_premium > 0 else "0%")
+                    
+                    with premium_col2:
+                        st.markdown(f"<h4 style='color: {st.session_state.put_color}'>Put Premium</h4>", unsafe_allow_html=True)
+                        st.metric("Total", f"${total_put_premium:,.0f}")
+                        st.metric("OTM", f"${otm_put_premium:,.0f}", f"{otm_put_premium/total_put_premium*100:.1f}%" if total_put_premium > 0 else "0%")
+                        st.metric("ITM", f"${itm_put_premium:,.0f}", f"{itm_put_premium/total_put_premium*100:.1f}%" if total_put_premium > 0 else "0%")
+                    
+                    with premium_col3:
+                        st.markdown("<h4>Premium Analysis</h4>", unsafe_allow_html=True)
+                        
+                        # Calculate OTM/ITM ratios for sentiment analysis
+                        otm_itm_call_ratio = otm_call_premium / max(itm_call_premium, 1)
+                        otm_itm_put_ratio = otm_put_premium / max(itm_put_premium, 1)
+                        
+                        # Show OTM to ITM ratios
+                        st.metric("OTM/ITM Call Ratio", f"{otm_itm_call_ratio:.2f}")
+                        st.metric("OTM/ITM Put Ratio", f"{otm_itm_put_ratio:.2f}")
+                        
+                        # Premium concentration
+                        total_premium = total_call_premium + total_put_premium
+                        st.metric("Call Premium %", f"{total_call_premium/total_premium*100:.1f}%" if total_premium > 0 else "0%")
+                        st.metric("Put Premium %", f"{total_put_premium/total_premium*100:.1f}%" if total_premium > 0 else "0%")
+                        
+                    # Add additional premium insights
+                    st.markdown("### Premium Insights")
+                    
+                    # Create strike-based premium insights - Fix for deprecation warning
+                    # Instead of using groupby().apply(), calculate premium directly
+                    calls_premium = all_calls.copy()
+                    calls_premium['premium'] = calls_premium['volume'] * calls_premium['lastPrice'] * 100
+                    call_premium_by_strike = calls_premium.groupby('strike')['premium'].sum().reset_index()
+                    
+                    puts_premium = all_puts.copy()
+                    puts_premium['premium'] = puts_premium['volume'] * puts_premium['lastPrice'] * 100
+                    put_premium_by_strike = puts_premium.groupby('strike')['premium'].sum().reset_index()
+                    
+                    # Find top premium concentrations
+                    top_call_strikes = call_premium_by_strike.nlargest(3, 'premium')
+                    top_put_strikes = put_premium_by_strike.nlargest(3, 'premium')
+                    
+                    # Calculate call vs put premium for each strike and net premium flow
+                    premium_combined = pd.merge(call_premium_by_strike, put_premium_by_strike, on='strike', how='outer', suffixes=('_call', '_put')).fillna(0)
+                    premium_combined['net_premium'] = premium_combined['premium_call'] - premium_combined['premium_put']
+                    premium_combined['ratio'] = premium_combined['premium_call'] / premium_combined['premium_put'].replace(0, 1)
+                    
+                    # Find strikes with most bullish and bearish premium flow
+                    bullish_strikes = premium_combined.nlargest(3, 'net_premium')
+                    bearish_strikes = premium_combined.nsmallest(3, 'net_premium')
+                    
+                    # Calculate total premium for percentages
+                    total_call_premium_sum = call_premium_by_strike['premium'].sum()
+                    total_put_premium_sum = put_premium_by_strike['premium'].sum()
+                    
+                    insight_col1, insight_col2 = st.columns(2)
+                    
+                    # Use a table format instead of text lines to avoid formatting issues
+                    with insight_col1:
+                        st.markdown(f"<h5 style='color: {st.session_state.call_color}'>Top Call Premium Strikes</h5>", unsafe_allow_html=True)
+                        
+                        # Create DataFrames for display
+                        call_strikes_data = []
+                        for _, row in top_call_strikes.iterrows():
+                            pct = (row['premium'] / total_call_premium_sum * 100) if total_call_premium_sum > 0 else 0
+                            call_strikes_data.append({
+                                "Strike": f"${row['strike']:.1f}", 
+                                "Premium": f"${row['premium']:,.0f}", 
+                                "% of Total": f"{pct:.1f}%"
+                            })
+                        st.table(pd.DataFrame(call_strikes_data))
+                        
+                        st.markdown(f"<h5 style='color: {st.session_state.call_color}'>Most Bullish Premium Flow</h5>", unsafe_allow_html=True)
+                        
+                        bullish_data = []
+                        for _, row in bullish_strikes.iterrows():
+                            bullish_data.append({
+                                "Strike": f"${row['strike']:.1f}", 
+                                "Net Premium": f"+${row['net_premium']:,.0f}", 
+                                "C/P Ratio": f"{row['ratio']:.2f}"
+                            })
+                        st.table(pd.DataFrame(bullish_data))
+                    
+                    with insight_col2:
+                        st.markdown(f"<h5 style='color: {st.session_state.put_color}'>Top Put Premium Strikes</h5>", unsafe_allow_html=True)
+                        
+                        put_strikes_data = []
+                        for _, row in top_put_strikes.iterrows():
+                            pct = (row['premium'] / total_put_premium_sum * 100) if total_put_premium_sum > 0 else 0
+                            put_strikes_data.append({
+                                "Strike": f"${row['strike']:.1f}", 
+                                "Premium": f"${row['premium']:,.0f}", 
+                                "% of Total": f"{pct:.1f}%"
+                            })
+                        st.table(pd.DataFrame(put_strikes_data))
+                        
+                        st.markdown(f"<h5 style='color: {st.session_state.put_color}'>Most Bearish Premium Flow</h5>", unsafe_allow_html=True)
+                        
+                        bearish_data = []
+                        for _, row in bearish_strikes.iterrows():
+                            bearish_data.append({
+                                "Strike": f"${row['strike']:.1f}", 
+                                "Net Premium": f"-${abs(row['net_premium']):,.0f}", 
+                                "C/P Ratio": f"{row['ratio']:.2f}"
+                            })
+                        st.table(pd.DataFrame(bearish_data))
+
+                with tab4:
+                    # Original data tables
+                    volume_over_oi = st.checkbox("Show only rows where Volume > Open Interest")
+                    # Filter data based on volume over OI if checked
+                    calls_filtered = all_calls.copy()
+                    puts_filtered = all_puts.copy()
+                    if volume_over_oi:
+                        calls_filtered = calls_filtered[calls_filtered['volume'] > calls_filtered['openInterest']]
+                        puts_filtered = puts_filtered[puts_filtered['volume'] > puts_filtered['openInterest']]
+                    if calls_filtered.empty and puts_filtered.empty:
+                        st.warning("No data left after applying filters.")
+                    else:
                         st.write("### Filtered Data Tables")
                         if not calls_filtered.empty:
                             st.write("**Calls Table**")
@@ -2031,62 +2903,6 @@ if st.session_state.current_page == "OI & Volume":
                             st.dataframe(puts_filtered)
                         else:
                             st.write("No puts match filters.")
-
-elif st.session_state.current_page == "Volume Ratio":
-    main_container = st.container()
-    with main_container:
-        st.empty()  # Clear previous content
-        col1, col2 = st.columns([0.94, 0.06])
-        with col1:
-            user_ticker = st.text_input("Enter Stock Ticker (e.g., SPY, TSLA, SPX, NDX):", saved_ticker, key="volume_ratio_ticker")
-        with col2:
-            st.write("")  # Add some spacing
-            st.write("")  # Add some spacing
-            if st.button("🔄", key="refresh_button_volume"):
-                st.cache_data.clear()  # Clear the cache before rerunning
-                st.rerun()
-        ticker = format_ticker(user_ticker)
-        
-        # Clear cache if ticker changes
-        if ticker != saved_ticker:
-            st.cache_data.clear()
-            save_ticker(ticker)  # Save the ticker
-        
-        if ticker:
-            # Fetch price once
-            S = get_current_price(ticker)
-            if S is None:
-                st.error("Could not fetch current price.")
-                st.stop()
-
-            stock = yf.Ticker(ticker)
-            available_dates = stock.options
-            if not available_dates:
-                st.warning("No options data available for this ticker.")
-            else:
-                selected_expiry_dates, selector_container = expiry_selector_fragment(st.session_state.current_page, available_dates)
-                st.session_state.expiry_selector_container = selector_container
-                
-                if not selected_expiry_dates:
-                    st.warning("Please select at least one expiration date.")
-                    st.stop()
-                
-                all_calls, all_puts = fetch_and_process_multiple_dates(
-                    ticker,
-                    selected_expiry_dates,
-                    lambda t, d: fetch_options_for_date(t, d, S)  # Pass S to fetch_options_for_date
-                )
-                
-                if all_calls.empty and all_puts.empty:
-                    st.warning("No options data available for the selected dates.")
-                    st.stop()
-                
-                call_volume = all_calls['volume'].sum()
-                put_volume = all_puts['volume'].sum()
-                fig = create_donut_chart(call_volume, put_volume)
-                st.plotly_chart(fig, use_container_width=True, key=f"Volume Ratio_donut_chart")
-                st.markdown(f"**Total Call Volume:** {call_volume}")
-                st.markdown(f"**Total Put Volume:** {put_volume}")
 
 elif st.session_state.current_page == "Gamma Exposure":
     exposure_container = st.container()
@@ -2908,6 +3724,48 @@ if st.session_state.current_page == "Dashboard":
                                 day_open = stock_info.get('regularMarketOpen', 0)
                                 change = current_price - prev_close
                                 change_percent = (change / prev_close) * 100
+                                
+                                # Get additional metrics
+                                market_cap = stock_info.get('marketCap', 0)
+                                market_cap_str = f"${market_cap/1e9:.2f}B" if market_cap >= 1e9 else f"${market_cap/1e6:.2f}M"
+                                
+                                avg_volume = stock_info.get('averageVolume', 0)
+                                current_volume = stock_info.get('volume', 0)
+                                volume_ratio = current_volume / avg_volume if avg_volume > 0 else 0
+                                
+                                fifty_two_week_high = stock_info.get('fiftyTwoWeekHigh', 0)
+                                fifty_two_week_low = stock_info.get('fiftyTwoWeekLow', 0)
+                                from_52_week_high = ((current_price - fifty_two_week_high) / fifty_two_week_high) * 100
+                                from_52_week_low = ((current_price - fifty_two_week_low) / fifty_two_week_low) * 100
+                                
+                                # Get options data if available (to calculate call-to-put ratio)
+                                call_put_ratio_text = ""
+                                options_volume_text = ""
+                                
+                                try:
+                                    stock = yf.Ticker(st.session_state.saved_ticker)
+                                    if hasattr(stock, 'options') and stock.options:
+                                        # Get nearest expiry
+                                        nearest_expiry = get_nearest_expiry(stock.options)
+                                        if nearest_expiry:
+                                            calls, puts = fetch_options_for_date(st.session_state.saved_ticker, nearest_expiry, current_price)
+                                            call_volume = calls['volume'].sum()
+                                            put_volume = puts['volume'].sum()
+                                            call_oi = calls['openInterest'].sum()
+                                            put_oi = puts['openInterest'].sum()
+                                            
+                                            if put_volume > 0:
+                                                cp_volume_ratio = call_volume / put_volume
+                                                cp_ratio_color = st.session_state.call_color if cp_volume_ratio > 1 else st.session_state.put_color
+                                                options_volume_text = f"<span style='color: gray;'>Call Vol:</span> <span style='color: {st.session_state.call_color}'>{call_volume:,}</span> | <span style='color: gray;'>Put Vol:</span> <span style='color: {st.session_state.put_color}'>{put_volume:,}</span>"
+                                                call_put_ratio_text = f" | <span style='color: gray;'>C/P Ratio:</span> <span style='color: {cp_ratio_color}'>{cp_volume_ratio:.2f}</span>"
+                                            
+                                            if put_oi > 0:
+                                                cp_oi_ratio = call_oi / put_oi
+                                                oi_ratio_color = st.session_state.call_color if cp_oi_ratio > 1 else st.session_state.put_color
+                                                call_put_ratio_text += f" | <span style='color: gray;'>OI Ratio:</span> <span style='color: {oi_ratio_color}'>{cp_oi_ratio:.2f}</span>"
+                                except Exception as e:
+                                    print(f"Error fetching options data: {e}")
 
                                 # Create market data display
                                 price_color = st.session_state.call_color if change >= 0 else st.session_state.put_color
@@ -2920,7 +3778,14 @@ if st.session_state.current_page == "Dashboard":
                                     </span><br>
                                     <span style='color: gray; font-size: 14px;'>
                                         Open: ${day_open:.2f} | High: ${day_high:.2f} | Low: ${day_low:.2f} | Prev Close: ${prev_close:.2f}
+                                    </span><br>
+                                    <span style='color: gray; font-size: 14px;'>
+                                        Market Cap: {market_cap_str} | Vol: {current_volume:,} ({volume_ratio:.2f}x avg)
+                                    </span><br>
+                                    <span style='color: gray; font-size: 14px;'>
+                                        52W Range: ${fifty_two_week_low:.2f} to ${fifty_two_week_high:.2f} ({from_52_week_low:.1f}% from low, {from_52_week_high:.1f}% from high)
                                     </span>
+                                    {options_volume_text and f"<br><span style='color: gray; font-size: 14px;'>{options_volume_text}{call_put_ratio_text}</span>" or ""}
                                 </div>
                                 """
                                 st.markdown(price_text, unsafe_allow_html=True)
@@ -2929,7 +3794,6 @@ if st.session_state.current_page == "Dashboard":
                                 print(f"Error fetching additional market data: {e}")
                             
                             st.markdown("---")
-
                     # Display selected charts
                     if "Intraday Price" in selected_charts:
                         st.plotly_chart(fig_intraday, use_container_width=True, key="Dashboard_intraday_chart")
@@ -3491,6 +4355,26 @@ elif st.session_state.current_page == "Analysis":
                 st.warning("No historical data available for this ticker.")
                 st.stop()
 
+            # Add key price metrics at the top
+            recent_data = historical_data.tail(2)
+            if len(recent_data) >= 2:
+                prev_close = recent_data.iloc[-2]['Close']
+                current_close = recent_data.iloc[-1]['Close']
+                daily_change = (current_close - prev_close) / prev_close * 100
+                daily_range = recent_data.iloc[-1]['High'] - recent_data.iloc[-1]['Low']
+                daily_range_pct = daily_range / current_close * 100
+                
+                # Add price metrics in columns
+                metrics_cols = st.columns(4)
+                with metrics_cols[0]:
+                    st.metric("Current Price", f"${S:.2f}", f"{daily_change:.2f}%")
+                with metrics_cols[1]:
+                    st.metric("Daily Range", f"${daily_range:.2f}", f"{daily_range_pct:.2f}%")
+                with metrics_cols[2]:
+                    st.metric("52W High", f"${historical_data['High'].max():.2f}")
+                with metrics_cols[3]:
+                    st.metric("52W Low", f"${historical_data['Low'].min():.2f}")
+
             # Calculate indicators with proper padding
             lookback = 20  # Standard lookback period
             padding_data = pd.concat([
@@ -3521,25 +4405,28 @@ elif st.session_state.current_page == "Analysis":
 
             historical_data['RSI'] = calculate_rsi(historical_data['Close'])
             
-            # Calculate GEX with padding for rolling average
-            historical_data['GEX'] = historical_data['Close'].pct_change() * 1000
-            gex_padded = pd.concat([
-                historical_data['GEX'].iloc[:lookback].iloc[::-1],
-                historical_data['GEX']
-            ])
-            historical_data['Rolling GEX Avg'] = gex_padded.rolling(window=lookback).mean()[lookback:].values
+            # Calculate MACD
+            historical_data['EMA12'] = historical_data['Close'].ewm(span=12, adjust=False).mean()
+            historical_data['EMA26'] = historical_data['Close'].ewm(span=26, adjust=False).mean()
+            historical_data['MACD'] = historical_data['EMA12'] - historical_data['EMA26']
+            historical_data['Signal'] = historical_data['MACD'].ewm(span=9, adjust=False).mean()
+            historical_data['Histogram'] = historical_data['MACD'] - historical_data['Signal']
+            
+            # Calculate Historical Volatility (20-day)
+            historical_data['Log_Return'] = np.log(historical_data['Close'] / historical_data['Close'].shift(1))
+            historical_data['Volatility_20d'] = historical_data['Log_Return'].rolling(window=20).std() * np.sqrt(252) * 100
 
             # Create technical analysis chart
             fig = make_subplots(
-                rows=3, 
+                rows=2, 
                 cols=1, 
-                shared_xaxes=False,
+                shared_xaxes=True,
                 vertical_spacing=0.1,
                 subplot_titles=(
                     'Price vs. Simple Moving Average and Bollinger Bands',
-                    'GEX Rolling Average',
                     'RSI'
-                )
+                ),
+                row_heights=[0.7, 0.3]
             )
 
             call_color = st.session_state.call_color
@@ -3567,44 +4454,20 @@ elif st.session_state.current_page == "Analysis":
                 row=1, col=1
             )
 
-            # GEX chart
-            positive_gex = historical_data['GEX'] >= 0
-            negative_gex = historical_data['GEX'] < 0
-            
-            fig.add_trace(
-                go.Bar(x=historical_data.index[positive_gex],
-                      y=historical_data['GEX'][positive_gex],
-                      name='Positive GEX', marker_color=call_color),
-                row=2, col=1
-            )
-            fig.add_trace(
-                go.Bar(x=historical_data.index[negative_gex],
-                      y=historical_data['GEX'][negative_gex],
-                      name='Negative GEX', marker_color=put_color),
-                row=2, col=1
-            )
-            fig.add_trace(
-                go.Scatter(x=historical_data.index,
-                          y=historical_data['Rolling GEX Avg'],
-                          name='Rolling Average',
-                          line=dict(color='magenta')),
-                row=2, col=1
-            )
-
             # RSI
             fig.add_trace(
                 go.Scatter(x=historical_data.index,
                           y=historical_data['RSI'],
                           name='RSI',
                           line=dict(color='turquoise')),
-                row=3, col=1
+                row=2, col=1
             )
 
-            # Add overbought/oversold lines
+            # Add overbought/oversold lines to the RSI chart (row 2)
             fig.add_hline(y=70, line_dash="dash", line_color=call_color,
-                         row=3, col=1, annotation_text="Overbought")
+                         row=2, col=1, annotation_text="Overbought")
             fig.add_hline(y=30, line_dash="dash", line_color=put_color,
-                         row=3, col=1, annotation_text="Oversold")
+                         row=2, col=1, annotation_text="Oversold")
 
             # Update layout
             fig.update_layout(
@@ -3616,14 +4479,14 @@ elif st.session_state.current_page == "Analysis":
                     font=dict(size=st.session_state.chart_text_size + 8)
                 ),
                 showlegend=True,
-                height=1000,
+                height=800,  # Reduced to better fit with weekday returns
                 legend=dict(
                     font=dict(size=st.session_state.chart_text_size)
                 )
             )
 
-            # Update axes
-            for i in range(1, 4):
+            # Update axes for both rows
+            for i in range(1, 3):
                 fig.update_xaxes(
                     tickfont=dict(size=st.session_state.chart_text_size),
                     title_font=dict(size=st.session_state.chart_text_size),
@@ -3635,11 +4498,141 @@ elif st.session_state.current_page == "Analysis":
                     row=i, col=1
                 )
 
+            # Set y-axis range for RSI
+            fig.update_yaxes(range=[0, 100], row=2, col=1)
+
             # Display technical analysis chart
             st.plotly_chart(fig, use_container_width=True)
+            
+            # Create MACD chart
+            macd_fig = make_subplots(rows=1, cols=1)
+            
+            macd_fig.add_trace(
+                go.Scatter(x=historical_data.index, y=historical_data['MACD'], 
+                          name='MACD', line=dict(color='blue')),
+            )
+            macd_fig.add_trace(
+                go.Scatter(x=historical_data.index, y=historical_data['Signal'], 
+                          name='Signal', line=dict(color='red')),
+            )
+            
+            # Add histogram as bar chart
+            macd_fig.add_trace(
+                go.Bar(x=historical_data.index, y=historical_data['Histogram'],
+                      name='Histogram',
+                      marker_color=historical_data['Histogram'].apply(
+                          lambda x: call_color if x >= 0 else put_color
+                      )),
+            )
+            
+            macd_fig.update_layout(
+                title=dict(
+                    text="MACD Indicator",
+                    x=0,
+                    xanchor='left',
+                    font=dict(size=st.session_state.chart_text_size + 4)
+                ),
+                height=300,
+                template="plotly_dark",
+                legend=dict(
+                    font=dict(size=st.session_state.chart_text_size)
+                ),
+                xaxis=dict(
+                    tickfont=dict(size=st.session_state.chart_text_size),
+                    title_font=dict(size=st.session_state.chart_text_size)
+                ),
+                yaxis=dict(
+                    tickfont=dict(size=st.session_state.chart_text_size),
+                    title_font=dict(size=st.session_state.chart_text_size)
+                )
+            )
+            
+            # Display MACD chart
+            st.plotly_chart(macd_fig, use_container_width=True)
+            
+            # Historical volatility chart
+            vol_fig = go.Figure()
+            vol_fig.add_trace(
+                go.Scatter(
+                    x=historical_data.index,
+                    y=historical_data['Volatility_20d'],
+                    name='20-Day HV',
+                    line=dict(color='orange', width=2)
+                )
+            )
+            
+            vol_fig.update_layout(
+                title=dict(
+                    text="Historical Volatility (20-Day)",
+                    x=0,
+                    xanchor='left',
+                    font=dict(size=st.session_state.chart_text_size + 4)
+                ),
+                height=300,
+                template="plotly_dark",
+                xaxis=dict(
+                    tickfont=dict(size=st.session_state.chart_text_size),
+                    title_font=dict(size=st.session_state.chart_text_size)
+                ),
+                yaxis=dict(
+                    title="Volatility %",
+                    tickfont=dict(size=st.session_state.chart_text_size),
+                    title_font=dict(size=st.session_state.chart_text_size),
+                    ticksuffix="%"
+                )
+            )
+            
+            # Display volatility chart
+            st.plotly_chart(vol_fig, use_container_width=True)
 
-            # Add weekday returns analysis at the bottom
-            st.markdown("---")
+            # Add trend indicator section
+            st.subheader("Technical Indicators Summary")
+            
+            # Calculate trend indicators
+            current_price = historical_data['Close'].iloc[-1]
+            sma20 = historical_data['SMA'].iloc[-1]
+            sma50 = historical_data['Close'].rolling(window=50).mean().iloc[-1]
+            sma200 = historical_data['Close'].rolling(window=200).mean().iloc[-1]
+            rsi = historical_data['RSI'].iloc[-1]
+            macd = historical_data['MACD'].iloc[-1]
+            signal = historical_data['Signal'].iloc[-1]
+            
+            # Create indicator cards in columns
+            indicator_cols = st.columns(3)
+            
+            with indicator_cols[0]:
+                st.markdown("**Price vs Moving Averages**")
+                ma_indicators = [
+                    f"Price vs 20 SMA: {'Bullish' if current_price > sma20 else 'Bearish'}",
+                    f"Price vs 50 SMA: {'Bullish' if current_price > sma50 else 'Bearish'}",
+                    f"Price vs 200 SMA: {'Bullish' if current_price > sma200 else 'Bearish'}"
+                ]
+                for ind in ma_indicators:
+                    st.markdown(f"- {ind}")
+            
+            with indicator_cols[1]:
+                st.markdown("**Momentum Indicators**")
+                momentum_indicators = [
+                    f"RSI (14): {rsi:.2f} ({'Overbought' if rsi > 70 else 'Oversold' if rsi < 30 else 'Neutral'})",
+                    f"MACD: {macd:.4f} vs Signal: {signal:.4f}",
+                    f"MACD Signal: {'Bullish' if macd > signal else 'Bearish'}"
+                ]
+                for ind in momentum_indicators:
+                    st.markdown(f"- {ind}")
+            
+            with indicator_cols[2]:
+                st.markdown("**Volatility Indicators**")
+                recent_vol = historical_data['Volatility_20d'].iloc[-1]
+                avg_vol = historical_data['Volatility_20d'].mean()
+                vol_indicators = [
+                    f"Current HV (20d): {recent_vol:.2f}%",
+                    f"Avg HV (1yr): {avg_vol:.2f}%",
+                    f"Vol Trend: {'Above Average' if recent_vol > avg_vol else 'Below Average'}"
+                ]
+                for ind in vol_indicators:
+                    st.markdown(f"- {ind}")
+
+            # Add weekday returns analysis without extra spacing
             st.subheader("Weekday Returns Analysis")
             
             period = st.selectbox(
@@ -3699,15 +4692,47 @@ elif st.session_state.current_page == "Delta-Adjusted Value Index":
                     st.warning("Please select at least one expiration date.")
                     st.stop()
                 
+                # The issue is here - we need to make sure the Greek values are computed
                 all_calls, all_puts = fetch_and_process_multiple_dates(
                     ticker,
                     selected_expiry_dates,
+                    # Use compute_greeks_and_charts to ensure calc_delta is calculated
                     lambda t, d: compute_greeks_and_charts(t, d, "davi", S)[:2]
                 )
                 
                 if all_calls.empty and all_puts.empty:
                     st.warning("No options data available for the selected dates.")
                     st.stop()
+                    
+                # Calculate delta values if they don't exist
+                if 'calc_delta' not in all_calls.columns:
+                    all_calls = all_calls.copy()
+                    all_puts = all_puts.copy()
+                    
+                    # Calculate days to expiry for each option
+                    today = datetime.today().date()
+                    all_calls['t'] = (all_calls['extracted_expiry'] - today).dt.days / 365.0
+                    all_puts['t'] = (all_puts['extracted_expiry'] - today).dt.days / 365.0
+                    
+                    # Define delta calculation function
+                    def compute_delta(row, flag):
+                        try:
+                            sigma = row.get("impliedVolatility", None)
+                            if sigma is None or sigma <= 0:
+                                return None
+                            t = row.get("t", None)
+                            if t is None or t <= 0:
+                                return None
+                            K = row.get("strike", None)
+                            if K is None:
+                                return None
+                            return calculate_greeks(flag, S, K, t, sigma)['delta']
+                        except Exception:
+                            return None
+                    
+                    # Calculate delta
+                    all_calls['calc_delta'] = all_calls.apply(lambda row: compute_delta(row, "c"), axis=1)
+                    all_puts['calc_delta'] = all_puts.apply(lambda row: compute_delta(row, "p"), axis=1)
 
                 fig = create_davi_chart(all_calls, all_puts, S)
                 st.plotly_chart(fig, use_container_width=True)
@@ -3722,3 +4747,4 @@ if not st.session_state.get("loading_complete", False):
 else:
     time.sleep(refresh_rate)
     st.rerun()
+
