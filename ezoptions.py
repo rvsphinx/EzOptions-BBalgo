@@ -3428,9 +3428,11 @@ elif st.session_state.current_page == "Calculated Greeks":
                     st.stop()
 
 if st.session_state.current_page == "Dashboard":
-    main_container = st.container()
-    with main_container:
-        st.empty()
+    dashboard_container = st.container()
+    with dashboard_container:
+        st.empty()  # Clear previous content
+        
+        # Create a single input for ticker with refresh button
         col1, col2 = st.columns([0.94, 0.06])
         with col1:
             user_ticker = st.text_input("Enter Stock Ticker (e.g., SPY, TSLA, SPX, NDX):", saved_ticker, key="dashboard_ticker")
@@ -3438,14 +3440,15 @@ if st.session_state.current_page == "Dashboard":
             st.write("")  # Add some spacing
             st.write("")  # Add some spacing
             if st.button("🔄", key="refresh_button_dashboard"):
-                st.cache_data.clear()  # Clear the cache before rerunning
+                st.cache_data.clear()
                 st.rerun()
+        
         ticker = format_ticker(user_ticker)
         
         # Clear cache if ticker changes
         if ticker != saved_ticker:
             st.cache_data.clear()
-            save_ticker(ticker)  # Save the ticker
+            save_ticker(ticker)
         
         if ticker:
             # Fetch price once
