@@ -155,6 +155,9 @@ def add_current_price_line(fig, current_price):
         opacity=0.7,
         annotation_text=f"{current_price}",
         annotation_position="top",
+        annotation=dict(
+            font=dict(size=st.session_state.chart_text_size)
+        )
     )
     return fig
 
@@ -758,77 +761,7 @@ def create_premium_heatmap(calls_df, puts_df, filtered_strikes, selected_expiry_
     
     return fig_calls, fig_puts
 
-def create_premium_ratio_chart(calls_df, puts_df):
-    """Create a chart showing call vs put premium ratio over different strikes"""
-    # Alternative approach to avoid DataFrameGroupBy.apply warnings
-    # Create temporary columns for premium calculation
-    calls_df_mod = calls_df.copy()
-    calls_df_mod['premium'] = calls_df_mod['volume'] * calls_df_mod['lastPrice'] * 100
-    call_premium_by_strike = calls_df_mod.groupby('strike')['premium'].sum().reset_index()
-    
-    puts_df_mod = puts_df.copy()
-    puts_df_mod['premium'] = puts_df_mod['volume'] * puts_df_mod['lastPrice'] * 100
-    put_premium_by_strike = puts_df_mod.groupby('strike')['premium'].sum().reset_index()
-    
-    # Merge data
-    premium_data = pd.merge(call_premium_by_strike, put_premium_by_strike, on='strike', how='outer', suffixes=('_call', '_put')).fillna(0)
-    premium_data['ratio'] = premium_data['premium_call'] / premium_data['premium_put'].replace(0, 1)  # Avoid division by zero
-    premium_data['ratio'] = premium_data['ratio'].clip(0, 10)  # Cap the ratio at 10 for visualization
-    
-    # Create visualization
-    fig = go.Figure()
-    
-    fig.add_trace(go.Scatter(
-        x=premium_data['strike'],
-        y=premium_data['ratio'],
-        mode='markers+lines',
-        marker=dict(
-            size=10,
-            color=premium_data['ratio'].apply(lambda x: st.session_state.call_color if x > 1 else st.session_state.put_color),
-            symbol='circle',
-            line=dict(
-                width=2,
-                color='white'
-            )
-        ),
-        name='Call/Put Premium Ratio'
-    ))
-    
-    # Add line at ratio = 1
-    fig.add_hline(
-        y=1,
-        line_dash="dash",
-        line_color="white",
-        opacity=0.7,
-        annotation_text="C/P = 1",
-        annotation_position="bottom right"
-    )
-    
-    fig.update_layout(
-        title=dict(
-            text="Call vs Put Premium Ratio by Strike",
-            x=0,
-            xanchor='left',
-            font=dict(size=st.session_state.chart_text_size + 8)
-        ),
-        xaxis_title=dict(
-            text='Strike Price',
-            font=dict(size=st.session_state.chart_text_size)
-        ),
-        yaxis_title=dict(
-            text='Call/Put Premium Ratio',
-            font=dict(size=st.session_state.chart_text_size)
-        ),
-        template="plotly_dark",
-        yaxis=dict(
-            tickfont=dict(size=st.session_state.chart_text_size)
-        ),
-        xaxis=dict(
-            tickfont=dict(size=st.session_state.chart_text_size)
-        )
-    )
-    
-    return fig
+# Removed: def create_premium_ratio_chart(calls_df, puts_df): function is deleted
 
 # -------------------------------
 # Fetch all options experations and add extract expiry
@@ -978,7 +911,28 @@ def create_oi_volume_charts(calls, puts, S):
             marker=dict(color=[call_color if val >= 0 else put_color for val in net_oi.values])
         ))
     
-    # Update OI chart layout with text size settings
+    # Calculate y-axis range with improved padding for OI chart
+    y_values = []
+    for trace in fig_oi.data:
+        if hasattr(trace, 'y') and trace.y is not None:
+            y_values.extend([y for y in trace.y if y is not None and not np.isnan(y)])
+    
+    if y_values:
+        oi_y_min = min(min(y_values), 0)  # Include 0 in the range
+        oi_y_max = max(y_values)
+        oi_y_range = oi_y_max - oi_y_min
+        
+        # Add 15% padding on top and 5% on bottom
+        oi_padding_top = oi_y_range * 0.15
+        oi_padding_bottom = oi_y_range * 0.05
+        oi_y_min = oi_y_min - oi_padding_bottom
+        oi_y_max = oi_y_max + oi_padding_top
+    else:
+        # Default values if no valid y values
+        oi_y_min = 0
+        oi_y_max = 100
+    
+    # Update OI chart layout with text size settings and improved y-axis range
     fig_oi.update_layout(
         title=dict(
             text='Open Interest by Strike',
@@ -1005,8 +959,10 @@ def create_oi_volume_charts(calls, puts, S):
             tickfont=dict(size=st.session_state.chart_text_size)
         ),
         yaxis=dict(
+            range=[oi_y_min, oi_y_max],
             tickfont=dict(size=st.session_state.chart_text_size)
-        )
+        ),
+        height=550  # Increased height for better visibility
     )
     
     fig_volume = px.bar(
@@ -1028,7 +984,28 @@ def create_oi_volume_charts(calls, puts, S):
             marker=dict(color=[call_color if val >= 0 else put_color for val in net_volume.values])
         ))
     
-    # Update Volume chart layout with text size settings
+    # Calculate y-axis range with improved padding for volume chart
+    y_values = []
+    for trace in fig_volume.data:
+        if hasattr(trace, 'y') and trace.y is not None:
+            y_values.extend([y for y in trace.y if y is not None and not np.isnan(y)])
+    
+    if y_values:
+        vol_y_min = min(min(y_values), 0)  # Include 0 in the range
+        vol_y_max = max(y_values)
+        vol_y_range = vol_y_max - vol_y_min
+        
+        # Add 15% padding on top and 5% on bottom
+        vol_padding_top = vol_y_range * 0.15
+        vol_padding_bottom = vol_y_range * 0.05
+        vol_y_min = vol_y_min - vol_padding_bottom
+        vol_y_max = vol_y_max + vol_padding_top
+    else:
+        # Default values if no valid y values
+        vol_y_min = 0
+        vol_y_max = 100
+    
+    # Update Volume chart layout with text size settings and improved y-axis range
     fig_volume.update_layout(
         title=dict(
             text='Volume by Strike',
@@ -1055,8 +1032,10 @@ def create_oi_volume_charts(calls, puts, S):
             tickfont=dict(size=st.session_state.chart_text_size)
         ),
         yaxis=dict(
+            range=[vol_y_min, vol_y_max],
             tickfont=dict(size=st.session_state.chart_text_size)
-        )
+        ),
+        height=550  # Increased height for better visibility
     )
     
     fig_oi.update_xaxes(rangeslider=dict(visible=True))
@@ -1737,11 +1716,11 @@ def chart_settings():
 
         # Add refresh rate control before chart type
         if 'refresh_rate' not in st.session_state:
-            st.session_state.refresh_rate = 5  # Default refresh rate
+            st.session_state.refresh_rate = 10  # Default refresh rate
         
         new_refresh_rate = st.number_input(
             "Auto-Refresh Rate (seconds)",
-            min_value=5,
+            min_value=10,
             max_value=300,
             value=int(st.session_state.refresh_rate),
             step=1,
@@ -1900,8 +1879,6 @@ def create_exposure_bar_chart(calls, puts, exposure_type, title, S):
     min_strike = S - st.session_state.strike_range
     max_strike = S + st.session_state.strike_range
     
-    # Apply strike range filter
-    calls_df = calls_df[(calls_df['strike'] >= min_strike) & (calls_df['strike'] <= max_strike)]
     # Apply strike range filter
     calls_df = calls_df[(calls_df['strike'] >= min_strike) & (calls_df['strike'] <= max_strike)]
     puts_df = puts_df[(puts_df['strike'] >= min_strike) & (puts_df['strike'] <= max_strike)]
@@ -2072,7 +2049,31 @@ def create_exposure_bar_chart(calls, puts, exposure_type, title, S):
                     fillcolor=put_color
                 ))
 
-    # Update layout
+    # Calculate y-axis range with improved padding
+    y_values = []
+    for trace in fig.data:
+        if hasattr(trace, 'y') and trace.y is not None:
+            y_values.extend([y for y in trace.y if y is not None and not np.isnan(y)])
+    
+    if y_values:
+        y_min = min(y_values)
+        y_max = max(y_values)
+        y_range = y_max - y_min
+        
+        # Ensure minimum range and add padding
+        if abs(y_range) < 1:
+            y_range = 1
+        
+        # Add 15% padding on top and bottom
+        padding = y_range * 0.15
+        y_min = y_min - padding
+        y_max = y_max + padding
+    else:
+        # Default values if no valid y values
+        y_min = -1
+        y_max = 1
+
+    # Update layout with calculated y-range
     padding = st.session_state.strike_range * 0.1
     fig.update_layout(
         title=dict(
@@ -2102,8 +2103,10 @@ def create_exposure_bar_chart(calls, puts, exposure_type, title, S):
             tickfont=dict(size=st.session_state.chart_text_size)
         ),
         yaxis=dict(
+            range=[y_min, y_max],
             tickfont=dict(size=st.session_state.chart_text_size)
-        )
+        ),
+        height=600  # Increase chart height for better visibility
     )
 
     fig = add_current_price_line(fig, S)
@@ -2214,6 +2217,27 @@ def create_max_pain_chart(calls, puts, S):
             line=dict(color=put_color, width=1, dash='dot')
         ))
 
+    # Calculate y-axis range with improved padding
+    y_values = []
+    for trace in fig.data:
+        if hasattr(trace, 'y') and trace.y is not None:
+            y_values.extend([y for y in trace.y if y is not None and not np.isnan(y)])
+    
+    if y_values:
+        y_min = min(y_values)
+        y_max = max(y_values)
+        y_range = y_max - y_min
+        
+        # Add 15% padding on top and 5% on bottom (unless y_min is 0)
+        padding_top = y_range * 0.15
+        padding_bottom = y_range * 0.05 if y_min > 0 else 0
+        y_min = y_min - padding_bottom
+        y_max = y_max + padding_top
+    else:
+        # Default values if no valid y values
+        y_min = 0
+        y_max = 100
+
     # Add vertical lines for different max pain points
     fig.add_vline(
         x=max_pain_strike,
@@ -2278,8 +2302,10 @@ def create_max_pain_chart(calls, puts, S):
             tickfont=dict(size=st.session_state.chart_text_size)
         ),
         yaxis=dict(
+            range=[y_min, y_max],
             tickfont=dict(size=st.session_state.chart_text_size)
-        )
+        ),
+        height=600  # Increased height for better visibility
     )
     
     # Add range slider consistent with other charts
@@ -2359,10 +2385,6 @@ def create_davi_chart(calls, puts, S):
     # Filter data based on strike range
     calls_df = calls_df[(calls_df['strike'] >= min_strike) & (calls_df['strike'] <= max_strike)]
     puts_df = puts_df[(puts_df['strike'] >= min_strike) & (puts_df['strike'] <= max_strike)]
-
-    # Filter the original dataframes for net exposure calculation
-    calls_filtered = calls[(calls['strike'] >= min_strike) & (calls['strike'] <= max_strike)]
-    puts_filtered = puts[(puts['strike'] >= min_strike) & (puts['strike'] <= max_strike)]
 
     # Calculate Net DAVI
     net_davi = pd.Series(0, index=sorted(set(calls_df['strike']) | set(puts_df['strike'])))
@@ -2537,7 +2559,8 @@ def create_davi_chart(calls, puts, S):
         ),
         yaxis=dict(
             tickfont=dict(size=st.session_state.chart_text_size)
-        )
+        ),
+        height=600  # Increased height for better visibility
     )
 
     return fig
@@ -2718,11 +2741,6 @@ if st.session_state.current_page == "OI & Volume":
                     # New: Advanced premium analysis
                     st.subheader("Premium Distribution Analysis")
                     
-                    # Create premium ratio chart
-                    premium_ratio_chart = create_premium_ratio_chart(all_calls, all_puts)
-                    
-                    # Display premium ratio chart
-                    st.plotly_chart(premium_ratio_chart, use_container_width=True)
                     
                     # Premium summary statistics
                     total_call_premium = (all_calls['volume'] * all_calls['lastPrice'] * 100).sum()
@@ -2742,6 +2760,21 @@ if st.session_state.current_page == "OI & Volume":
                     itm_put_premium = (all_puts[all_puts['moneyness'] == 'ITM']['volume'] * 
                                     all_puts[all_puts['moneyness'] == 'ITM']['lastPrice'] * 100).sum()
                     
+                    # Calculate ITM premium flow
+                    itm_net_premium = itm_call_premium - itm_put_premium
+                    itm_premium_ratio = itm_call_premium / max(itm_put_premium, 1)
+                    
+                    # Determine ITM premium flow sentiment
+                    if itm_premium_ratio > 1.5:
+                        itm_sentiment = "Bullish"
+                        itm_color = st.session_state.call_color
+                    elif itm_premium_ratio < 0.7:
+                        itm_sentiment = "Bearish"
+                        itm_color = st.session_state.put_color
+                    else:
+                        itm_sentiment = "Neutral"
+                        itm_color = "white"
+                        
                     # Display premium metrics in a cleaner format with call/put ratio indicator
                     st.markdown("### Premium Summary")
                     
@@ -2762,6 +2795,18 @@ if st.session_state.current_page == "OI & Volume":
                         f"""
                         <div style="padding: 10px; border-radius: 5px; background-color: rgba(50,50,50,0.3); margin-bottom: 15px;">
                             <h4>Call/Put Premium Ratio: <span style="color: {ratio_color}">{premium_ratio:.2f}</span> {ratio_status}</h4>
+                        </div>
+                        """, 
+                        unsafe_allow_html=True
+                    )
+                    
+                    # Add ITM premium flow indicator
+                    st.markdown(
+                        f"""
+                        <div style="padding: 10px; border-radius: 5px; background-color: rgba(50,50,50,0.3); margin-bottom: 15px;">
+                            <h4>ITM Premium Flow: <span style="color: {itm_color}">{itm_sentiment}</span> (Call/Put Ratio: {itm_premium_ratio:.2f})</h4>
+                            <p>Net ITM Premium: <span style="color: {st.session_state.call_color if itm_net_premium > 0 else st.session_state.put_color}">${abs(itm_net_premium):,.0f}</span> 
+                            {" toward calls" if itm_net_premium > 0 else " toward puts"}</p>
                         </div>
                         """, 
                         unsafe_allow_html=True
@@ -2798,7 +2843,60 @@ if st.session_state.current_page == "OI & Volume":
                         st.metric("Call Premium %", f"{total_call_premium/total_premium*100:.1f}%" if total_premium > 0 else "0%")
                         st.metric("Put Premium %", f"{total_put_premium/total_premium*100:.1f}%" if total_premium > 0 else "0%")
                         
-                    # Add additional premium insights
+                    # Add new ITM premium flow analysis chart
+                    st.markdown("### ITM Premium Flow Analysis")
+                    
+                    # Create a bar chart to visualize ITM premium distribution
+                    itm_premium_fig = go.Figure()
+                    
+                    # Add bars for ITM Call and Put premium
+                    itm_premium_fig.add_trace(go.Bar(
+                        x=['ITM Calls'],
+                        y=[itm_call_premium],
+                        name='ITM Call Premium',
+                        marker_color=st.session_state.call_color
+                    ))
+                    
+                    itm_premium_fig.add_trace(go.Bar(
+                        x=['ITM Puts'],
+                        y=[itm_put_premium],
+                        name='ITM Put Premium',
+                        marker_color=st.session_state.put_color
+                    ))
+                    
+                    # Add a third bar for net ITM premium flow if needed
+                    itm_premium_fig.add_trace(go.Bar(
+                        x=['Net ITM Flow'],
+                        y=[itm_net_premium],
+                        name='Net ITM Premium',
+                        marker_color=st.session_state.call_color if itm_net_premium > 0 else st.session_state.put_color
+                    ))
+                    
+                    itm_premium_fig.update_layout(
+                        title=dict(
+                            text=f"ITM Premium Flow - {itm_sentiment}",
+                            font=dict(size=st.session_state.chart_text_size + 6)
+                        ),
+                        xaxis_title=dict(
+                            text="Option Type",
+                            font=dict(size=st.session_state.chart_text_size)
+                        ),
+                        yaxis_title=dict(
+                            text="Premium ($)",
+                            font=dict(size=st.session_state.chart_text_size)
+                        ),
+                        template="plotly_dark",
+                        xaxis=dict(
+                            tickfont=dict(size=st.session_state.chart_text_size)
+                        ),
+                        yaxis=dict(
+                            tickfont=dict(size=st.session_state.chart_text_size)
+                        )
+                    )
+                    
+                    st.plotly_chart(itm_premium_fig, use_container_width=True)
+                    
+                    # Add additional premium insights with ITM flow details
                     st.markdown("### Premium Insights")
                     
                     # Create strike-based premium insights - Fix for deprecation warning
@@ -2812,8 +2910,8 @@ if st.session_state.current_page == "OI & Volume":
                     put_premium_by_strike = puts_premium.groupby('strike')['premium'].sum().reset_index()
                     
                     # Find top premium concentrations
-                    top_call_strikes = call_premium_by_strike.nlargest(3, 'premium')
-                    top_put_strikes = put_premium_by_strike.nlargest(3, 'premium')
+                    top_call_strikes = call_premium_by_strike.nlargest(5, 'premium')
+                    top_put_strikes = put_premium_by_strike.nlargest(5, 'premium')
                     
                     # Calculate call vs put premium for each strike and net premium flow
                     premium_combined = pd.merge(call_premium_by_strike, put_premium_by_strike, on='strike', how='outer', suffixes=('_call', '_put')).fillna(0)
@@ -2821,8 +2919,8 @@ if st.session_state.current_page == "OI & Volume":
                     premium_combined['ratio'] = premium_combined['premium_call'] / premium_combined['premium_put'].replace(0, 1)
                     
                     # Find strikes with most bullish and bearish premium flow
-                    bullish_strikes = premium_combined.nlargest(3, 'net_premium')
-                    bearish_strikes = premium_combined.nsmallest(3, 'net_premium')
+                    bullish_strikes = premium_combined.nlargest(5, 'net_premium')
+                    bearish_strikes = premium_combined.nsmallest(5, 'net_premium')
                     
                     # Calculate total premium for percentages
                     total_call_premium_sum = call_premium_by_strike['premium'].sum()
@@ -4750,4 +4848,3 @@ if not st.session_state.get("loading_complete", False):
 else:
     time.sleep(refresh_rate)
     st.rerun()
-
