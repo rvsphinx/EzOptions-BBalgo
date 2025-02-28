@@ -386,7 +386,7 @@ def create_option_flow_charts(flow_data, title="Options Flow Analysis"):
         legend=dict(
             font=dict(size=st.session_state.chart_text_size)
         ),
-        barmode='group',
+        barmode='relative',
         template="plotly_dark"
     )
     
@@ -427,7 +427,7 @@ def create_option_flow_charts(flow_data, title="Options Flow Analysis"):
         legend=dict(
             font=dict(size=st.session_state.chart_text_size)
         ),
-        barmode='group',
+        barmode='relative',
         template="plotly_dark"
     )
     
@@ -517,7 +517,7 @@ def create_option_flow_charts(flow_data, title="Options Flow Analysis"):
         legend=dict(
             font=dict(size=st.session_state.chart_text_size)
         ),
-        barmode='group',
+        barmode='relative',
         template="plotly_dark"
     )
     
@@ -898,7 +898,7 @@ def create_oi_volume_charts(calls, puts, S):
         y='openInterest',
         color='OptionType',
         title='Open Interest by Strike',
-        barmode='group',
+        barmode='relative',
         color_discrete_map={'Call': call_color, 'Put': put_color}
     )
     
@@ -971,7 +971,7 @@ def create_oi_volume_charts(calls, puts, S):
         y='volume',
         color='OptionType',
         title='Volume by Strike',
-        barmode='group',
+        barmode='relative',
         color_discrete_map={'Call': call_color, 'Put': put_color}
     )
     
@@ -2094,7 +2094,7 @@ def create_exposure_bar_chart(calls, puts, exposure_type, title, S):
         legend=dict(
             font=dict(size=st.session_state.chart_text_size)
         ),
-        barmode='group',
+        barmode='relative',
         hovermode='x unified',
         xaxis=dict(
             range=[min_strike - padding, max_strike + padding],
@@ -2549,7 +2549,7 @@ def create_davi_chart(calls, puts, S):
         legend=dict(
             font=dict(size=st.session_state.chart_text_size)
         ),
-        barmode='group',
+        barmode='relative',
         hovermode='x unified',
         xaxis=dict(
             range=[min_strike - padding, max_strike + padding],
