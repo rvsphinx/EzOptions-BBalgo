@@ -21,6 +21,27 @@ import pytz
 from datetime import timedelta
 
 
+def calculate_heikin_ashi(df):
+    """Calculate Heikin Ashi candlestick values."""
+    ha_df = pd.DataFrame(index=df.index)
+    
+    # Calculate Heikin Ashi values
+    ha_df['HA_Close'] = (df['Open'] + df['High'] + df['Low'] + df['Close']) / 4
+    
+    # Initialize HA_Open with first candle's opening price
+    ha_df['HA_Open'] = pd.Series(index=df.index)
+    ha_df.loc[ha_df.index[0], 'HA_Open'] = df['Open'].iloc[0]
+    
+    # Calculate subsequent HA_Open values
+    for i in range(1, len(df)):
+        ha_df.loc[ha_df.index[i], 'HA_Open'] = (ha_df['HA_Open'].iloc[i-1] + ha_df['HA_Close'].iloc[i-1]) / 2
+    
+    ha_df['HA_High'] = df[['High', 'Open', 'Close']].max(axis=1)
+    ha_df['HA_Low'] = df[['Low', 'Open', 'Close']].min(axis=1)
+    
+    return ha_df
+
+
 @contextmanager
 def st_thread_context():
     """Thread context management for Streamlit"""
@@ -1607,8 +1628,8 @@ def chart_settings():
         if intraday_type == 'Candlestick':
             candlestick_type = st.selectbox(
                 "Candlestick Style:",
-                options=['Filled', 'Hollow'],
-                index=['Filled', 'Hollow'].index(st.session_state.candlestick_type)
+                options=['Filled', 'Hollow', 'Heikin Ashi'],
+                index=['Filled', 'Hollow', 'Heikin Ashi'].index(st.session_state.candlestick_type)
             )
             
             if candlestick_type != st.session_state.candlestick_type:
@@ -3593,7 +3614,26 @@ if st.session_state.current_page == "Dashboard":
 
                         # Add either candlestick or line trace based on selection
                         if st.session_state.intraday_chart_type == 'Candlestick':
-                            if st.session_state.candlestick_type == 'Hollow':
+                            if st.session_state.candlestick_type == 'Heikin Ashi':
+                                # Calculate Heikin Ashi values
+                                ha_data = calculate_heikin_ashi(intraday_data)
+                                fig_intraday.add_trace(
+                                    go.Candlestick(
+                                        x=ha_data.index,
+                                        open=ha_data['HA_Open'],
+                                        high=ha_data['HA_High'],
+                                        low=ha_data['HA_Low'],
+                                        close=ha_data['HA_Close'],
+                                        name="Price",
+                                        increasing_line_color=st.session_state.call_color,
+                                        decreasing_line_color=st.session_state.put_color,
+                                        increasing_fillcolor=st.session_state.call_color,
+                                        decreasing_fillcolor=st.session_state.put_color,
+                                        showlegend=False
+                                    ),
+                                    secondary_y=False
+                                )
+                            elif st.session_state.candlestick_type == 'Hollow':
                                 fig_intraday.add_trace(
                                     go.Candlestick(
                                         x=intraday_data.index,
@@ -4848,3 +4888,23 @@ if not st.session_state.get("loading_complete", False):
 else:
     time.sleep(refresh_rate)
     st.rerun()
+
+def calculate_heikin_ashi(df):
+    """Calculate Heikin Ashi candlestick values."""
+    ha_df = pd.DataFrame(index=df.index)
+    
+    # Calculate Heikin Ashi values
+    ha_df['HA_Close'] = (df['Open'] + df['High'] + df['Low'] + df['Close']) / 4
+    
+    # Initialize HA_Open with first candle's opening price
+    ha_df['HA_Open'] = pd.Series(index=df.index)
+    ha_df.loc[ha_df.index[0], 'HA_Open'] = df['Open'].iloc[0]
+    
+    # Calculate subsequent HA_Open values
+    for i in range(1, len(df)):
+        ha_df.loc[ha_df.index[i], 'HA_Open'] = (ha_df['HA_Open'].iloc[i-1] + ha_df['HA_Close'].iloc[i-1]) / 2
+    
+    ha_df['HA_High'] = df[['High', 'Open', 'Close']].max(axis=1)
+    ha_df['HA_Low'] = df[['Low', 'Open', 'Close']].min(axis=1)
+    
+    return ha_df
